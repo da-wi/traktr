@@ -1,0 +1,36 @@
+Package: traktr
+Title: Tiling, Fetching and Summarising for AOIs (H3 or Buffers)
+Version: 0.0.1
+Authors@R: c(person("David","Willinger", email="david.willinger@kl.ac.at", role=c("aut","cre"), comment = c(ORCID = "0000-0002-3110-2355")))
+Description: Build request tiles, fetch Sentinel-2 NDVI (CDSE), and summarise per AOI in a tidy workflow.
+License: GPL-3
+Encoding: UTF-8
+URL: .
+Roxygen: list(markdown = TRUE)
+Depends:
+    R (>= 4.1.0)
+Imports:
+    sf,
+    terra,
+    dplyr,
+    tibble,
+    rlang,
+    purrr,
+    glue,
+    cli,
+    exactextractr,
+    h3jsr,
+    yaml,
+    readr,
+    stringr,
+    ratelimitr,
+    CDSE
+Suggests:
+    ggplot2,
+    scales,
+    testthat (>= 3.0.0),
+    withr,
+    digest
+Config/testthat/edition: 3
+SystemRequirements: GDAL, GEOS, PROJ
+RoxygenNote: 7.3.2

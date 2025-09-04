@@ -1,0 +1,108 @@
+---
+output:
+  md_document:
+    variant: gfm
+---
+
+<!-- README.md is generated from README.Rmd. Please edit that file -->
+
+```{r, echo = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  fig.path = "man/figures/",
+  warning = FALSE
+)
+```
+
+# traktr
+
+[![R-CMD-check](https://github.com/da-wi/traktr/actions/workflows/R-CMD-check.yaml/badge.svg)](https://github.com/da-wi/traktr/actions/workflows/R-CMD-check.yaml)
+
+## Overview
+
+The `traktr` package provides a tidy workflow for enriching GPS tracking data from Sentinel-2 imagery and related products. It supports both H3-based and buffer-based areas of interest (AOI), handles tiling, querying and rate-limited downloads from the Copernicus Data Space Ecosystem (CDSE), and attaches contextual statistics back to your GPS data.
+
+## Installation
+
+Simply install from github using the package `devtools` (required since not published on CRAN).
+
+```{r eval=FALSE}
+# install.packages("devtools")
+
+# Install the latest version from github
+devtools::install_github("da-wi/gps_tracking")
+```
+
+### Setup
+
+After installing, you should create an account on https://shapps.dataspace.copernicus.eu/dashboard/#/account/settings and create an OAuth Client there. 
+
+If you did this, set up your `.Renviron` file, that includes the environmental variables for CDSE and the GPS data directory. 
+
+```{r eval=FALSE}
+CDSE_CLIENT_ID=myid
+CDSE_CLIENT_SECRET=mysecret
+GPS_SMB_ROOT="//myserver/GPS"
+```
+
+After adapting the files, read in the environmental variables by calling
+
+```{r eval=FALSE}
+readRenviron(".Renviron")
+```
+
+
+## Usage
+
+### Read data files
+
+Now, you should be able to read the *.csv files
+
+```{r eval=FALSE}
+gps_data <- read_gps_csv(pattern = paste0("^Z.*\\.csv$"))  |> 
+  select(subject, timestamp, lat, lon, direction, speed)
+
+df <- gps_data |> dplyr::slice(7000:13000)
+```
+
+### Fetch data from CDSE
+
+To fetch satellite imagery from CDSE, we need to create an OAuthClient with the credentials from our account. 
+(If you haven't, create new OAuth client here, after logging in https://shapps.dataspace.copernicus.eu/dashboard/#/account/settings). 
+
+These are the credentials you have to put in `.Renviron`.
+
+```{r eval=FALSE}
+oauth <- CDSE::GetOAuthClient(id = Sys.getenv("CDSE_CLIENT_ID", ""),
+                              secret = Sys.getenv("CDSE_CLIENT_SECRET", ""))
+
+```
+
+After that, we can simply retrieve the data from the server 
+
+```{r eval=FALSE}
+df_ndvi_h3_60 <- df |>
+  mutate_aoi_h3(lat, lon) |>
+  fetch_ndvi(from = as.Date("2025-04-01"),
+             to   = as.Date("2025-07-31"),
+             out_dir = "output/ndvi_default_2band_60m",
+             client  = oauth, 
+             res_m = 60 ) |>
+  attach_ndvi(out_dir = "output/ndvi_default_2band_60m", summary = "mean") 
+```
+
+
+Simple visualization
+
+```{r eval=FALSE}
+library(ggplot2)
+ggplot(df_ndvi_h3_60 |> filter(lat > 45) , aes(lon, lat, fill = ndvi_mean)) +
+  geom_sf(color = NA) +
+  theme_minimal()
+```
+
+
+## License
+
+This package is designed for internal use with sensitive GPS data. Example data are not distributed due to privacy restrictions. All users must configure access to their own data sources.

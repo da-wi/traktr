@@ -1,0 +1,31 @@
+template:
+  bootstrap: 5
+  bootswatch: flatly
+  bslib:
+    base_font: {google: "Inter"}
+    fg: "#222222"
+    bg: "#f7f7f7"
+    primary: "#0055aa"
+  light-switch: true
+
+navbar:
+  structure:
+    left: [home, reference, articles]
+    right: [github]
+
+reference:
+  - title: "AOI setup"
+    contents:
+      - mutate_aoi_h3
+      - mutate_aoi_buffer
+  - title: "Data retrieval"
+    contents:
+      - fetch_ndvi
+      - fetch_landuse
+  - title: "Data retrieval"
+    contents:
+      - attach_ndvi
+      - attach_landuse    
+  - title: "GPS CSV data"
+    contents:
+      - read_gps_csv
