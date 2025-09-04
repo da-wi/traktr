@@ -1,16 +1,17 @@
 <!-- README.md is generated from README.Rmd. Please edit that file -->
 
-# Sentinel for GPS data
+# traktr
 
-Tools for linking GPS tracking data with Sentinel-2 NDVI imagery.
+[![R-CMD-check](https://github.com/da-wi/traktr/actions/workflows/R-CMD-check.yaml/badge.svg)](https://github.com/da-wi/traktr/actions/workflows/R-CMD-check.yaml)
 
 ## Overview
 
-The `ndviTools` package provides a tidy workflow for enriching GPS
-tracking data with vegetation indices (NDVI) from Sentinel-2 imagery. It
-supports both H3-based and buffer-based areas of interest (AOI), handles
-tiling, querying and rate-limited downloads from the Copernicus Data
-Space Ecosystem (CDSE), and attaches NDVI statistics back to your data.
+The `traktr` package provides a tidy workflow for enriching GPS tracking
+data from Sentinel-2 imagery and related products. It supports both
+H3-based and buffer-based areas of interest (AOI), handles tiling,
+querying and rate-limited downloads from the Copernicus Data Space
+Ecosystem (CDSE), and attaches contextual statistics back to your GPS
+data.
 
 ## Installation
 
@@ -55,7 +56,7 @@ Now, you should be able to read the \*.csv files
 gps_data <- read_gps_csv(pattern = paste0("^Z.*\\.csv$"))  |> 
   select(subject, timestamp, lat, lon, direction, speed)
 
-df <- gps_data |> dplyr::slice(1000:6000)
+df <- gps_data |> dplyr::slice(7000:13000)
 ```
 
 ### Fetch data from CDSE
@@ -75,23 +76,22 @@ oauth <- CDSE::GetOAuthClient(id = Sys.getenv("CDSE_CLIENT_ID", ""),
 After that, we can simply retrieve the data from the server
 
 ``` r
-df_ndvi_h3_10 <- df |>
+df_ndvi_h3_60 <- df |>
   mutate_aoi_h3(lat, lon) |>
   fetch_ndvi(from = as.Date("2025-04-01"),
              to   = as.Date("2025-07-31"),
-             out_dir = "output/ndvi_default_2band_10m",
+             out_dir = "output/ndvi_default_2band_60m",
              client  = oauth, 
              res_m = 60 ) |>
-  attach_ndvi(out_dir = "output/ndvi_default_2band_10m", summary = "mean") 
+  attach_ndvi(out_dir = "output/ndvi_default_2band_60m", summary = "mean") 
 ```
 
 Simple visualization
 
 ``` r
 library(ggplot2)
-ggplot(df_ndvi_h3_10 |> sf::st_as_sf(), aes(lon, lat, color = ndvi_mean)) +
-  geom_sf() +
-  scale_fill_brewer(palette = "BrBG", type = "seq")+
+ggplot(df_ndvi_h3_60 |> filter(lat > 45) , aes(lon, lat, fill = ndvi_mean)) +
+  geom_sf(color = NA) +
   theme_minimal()
 ```
 
