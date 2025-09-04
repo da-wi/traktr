@@ -2,7 +2,7 @@
 
 # traktr
 
-[![R-CMD-check](https://github.com/da-wi/traktr/actions/workflows/R-CMD-check.yaml/badge.svg)](https://github.com/da-wi/traktr/actions/workflows/R-CMD-check.yaml)
+[![R-CMD-check](https://github.com/da-wi/traktr/actions/workflows/R-CMD-check.yml/badge.svg)](https://github.com/da-wi/traktr/actions/workflows/R-CMD-check.yml)
 
 ## Overview
 
