@@ -13,12 +13,10 @@ data.
 
 ## Installation
 
-Simply install from github using the package `pak`.
+Install with `pak`.
 
 ``` r
 # install.packages("pak")
-
-# Install the latest version from github
 pak::pak("da-wi/traktr")
 ```
 
@@ -39,18 +37,34 @@ gps <- tibble::tibble(
   lon = c(8.53, 8.54, 8.545)
 )
 
-# Define areas of interest
-buf <- mutate_aoi_buffer(gps, lat, lon, dist = 100)    # 100 m circles
-hex <- mutate_aoi_h3(gps, lat, lon, res = 10)          # H3 grid
+hex <- gps |> 
+  mutate_aoi_h3(res = 9) |> 
+  fetch_ndvi(from = as.Date("2025-04-01"),
+           to = as.Date("2025-07-31"),
+           out_dir = "data/.ndvi",
+           client = oauth, res_m = 10) |>
+  attach_ndvi()
 
-# Quick look 
-plot(sf::st_geometry(attr(buf, "traktr_aoi"))
+
+ggplot(hex, aes(fill = ndvi_mean))+
+  geom_sf() + 
+  scale_fill_gradient2(
+    low = "brown",
+    mid = "#E7D6A4",
+    high = "darkgreen",
+    midpoint = 0.5,
+    limits = c(0,1)
+  )+
+  labs(fill = "NDVI")
 ```
+
+![](man/figures/README-plot01.png)
 
 ## System requirements
 
 - R ≥ 4.2
-- For fetching Sentinel-2 data: Copernicus Data Space CDSE account.
+- For fetching Sentinel-2 data: [CDSE
+  account](https://dataspace.copernicus.eu/).
 - Optional: GPS_SMB_ROOT for your CSV data directory.
 
 ## Documentation
@@ -62,9 +76,14 @@ See the “Getting started” guide.
 Please cite `traktr` and data sources (Sentinel-2, ESA WorldCover) in
 publications.
 
+``` r
+citation("traktr")
+```
+
 ## Contributing
 
-Issues and PRs welcome.
+Contributions are welcome! Please open an issue for bug reports or
+feature requests.
 
 ## License
 

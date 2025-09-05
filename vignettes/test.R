@@ -241,3 +241,41 @@ gps_data_Z313 <- gps_data_Z313 |>
   fetch_landuse(out_dir = "output/.landuse") |>
   attach_landuse()
 
+
+library(traktr)
+library(dplyr)
+
+# Demo points
+gps <- tibble::tibble(
+  subject = c("Z001","Z001","Z002"),
+  timestamp = as.POSIXct(c("2025-06-01 08:10","2025-06-01 12:05","2025-06-02 09:30")),
+  lat = c(47.382, 47.384, 47.385),
+  lon = c(8.545, 8.542, 8.545)
+)
+
+
+
+# Define areas of interest
+hex <- gps |> 
+  mutate_aoi_h3(res = 9) |> 
+  fetch_ndvi(from = as.Date("2025-04-01"),
+           to = as.Date("2025-07-31"),
+           out_dir = "data/.ndvi",
+           client = oauth, res_m = 10) |>
+  attach_ndvi()
+
+ggplot(hex, aes(fill = ndvi_mean))+
+  geom_sf() + 
+  scale_fill_gradient2(
+    low = "brown",
+    mid = "#E7D6A4",
+    high = "darkgreen",
+    midpoint = 0.5,
+    limits = c(0,1)
+  )+
+  labs(fill = "NDVI")
+
+ggsave(
+  "man/figures/README-plot01.png",
+  width = 5, height = 3.5, dpi = 150
+)
