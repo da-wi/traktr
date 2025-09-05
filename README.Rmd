@@ -15,7 +15,7 @@ knitr::opts_chunk$set(
 
 # traktr <a href='https://da-wi.github.io/traktr/'><img src="man/figures/logo.png" align="right" height="139" /></a>
 
-[![R-CMD-check](https://github.com/da-wi/traktr/actions/workflows/R-CMD-check.yml/badge.svg)](https://github.com/da-wi/traktr/actions/workflows/R-CMD-check.yml)
+[![R-CMD-check](https://github.com/da-wi/traktr/actions/workflows/R-CMD-check.yml/badge.svg)](https://github.com/da-wi/traktr/actions/workflows/R-CMD-check.yml) [![Lifecycle: experimental](https://img.shields.io/badge/lifecycle-experimental-orange.svg)](https://lifecycle.r-lib.org/articles/stages.html#experimental) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ## Overview
 
