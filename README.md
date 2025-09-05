@@ -88,7 +88,3 @@ citation("traktr")
 
 Contributions are welcome! Please open an issue for bug reports or
 feature requests.
-
-## License
-
-MIT
