@@ -29,6 +29,8 @@ Suggests:
     ggplot2,
     cartographr,
     scales,
-    withr
+    withr,
+    testthat (>= 3.0.0)
 SystemRequirements: GDAL, GEOS, PROJ
 RoxygenNote: 7.3.2
+Config/testthat/edition: 3
