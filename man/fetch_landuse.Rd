@@ -5,7 +5,7 @@
 \title{Fetch ESA WorldCover tiles for a given AOI}
 \usage{
 fetch_landuse(
-  aoi,
+  df,
   out_dir,
   wc_year = 2021,
   wc_version = "v200",
@@ -15,7 +15,7 @@ fetch_landuse(
 )
 }
 \arguments{
-\item{aoi}{An \code{sf} polygon or multipolygon representing the AOI. Must have a valid CRS.}
+\item{df}{An \code{sf} polygon or multipolygon representing the AOI. Must have a valid CRS.}
 
 \item{out_dir}{Output directory where downloaded \code{.tif} files will be saved.}
 

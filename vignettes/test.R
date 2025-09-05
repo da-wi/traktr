@@ -9,8 +9,34 @@ library(cartographr)
 gps_data <- read_gps_csv(pattern = paste0("^Z.*\\.csv$"))  |> 
   select(subject, timestamp, lat, lon, direction, speed)
 
+gps_data <- vroom::vroom("output/enhanced.csv") |> select(subject, timestamp,lat,lon)
 
-oauth <- CDSE::GetOAuthClient(id = Sys.getenv("CDSE_CLIENT_ID", ""),
+aa <- gps_data |> mutate_aoi_h3()
+
+ggplot() +
+  ggspatial::annotation_map_tile(type = "cartolight", zoom = 7) +
+  geom_sf(data = attr(aa, "traktr_aoi"), fill = NA, colour = "#D81B60", linewidth = 0.8) +
+  coord_sf(expand = FALSE)
+
+
+aab <- aa |> select(-c(timestamp,lat,lon)) |> data.table::as.data.table() |> unique()
+
+attr(aa, "traktr_aoi")
+
+aa <- gps_data #|> filter(subject=="Z313") |> select(subject, timestamp,lat,lon)
+bb <- aa |> mutate_aoi_h3(lat = "lat", lon = "lon") |>
+  fetch_ndvi(
+    from = min(aa$timestamp),
+    to   = max(aa$timestamp),
+    out_dir = file.path("output/ndvi_10m_individual2", unique(aa$subject)),
+    client = oauth,
+    res_m = 10
+  ) |>
+  attach_ndvi() |>
+  fetch_landuse(out_dir = "output/worldcover_individual2") |>
+  attach_landuse(out_dir = "output/worldcover_individual2")
+
+ oauth <- CDSE::GetOAuthClient(id = Sys.getenv("CDSE_CLIENT_ID", ""),
                               secret = Sys.getenv("CDSE_CLIENT_SECRET", ""))  
 
 ahsg <- gps_data |>
@@ -89,7 +115,7 @@ ggplot(ahsg |> st_drop_geometry() |> select(subject,h3, ndvi_mean,frac_green_cor
   facet_wrap(~subject)
 
 MuMIn::r.squaredGLMM(
-  lmerTest::lmer(ndvi_mean ~ frac_green_core  + (1|subject), data = ahsg |> st_drop_geometry() |> select(subject,h3, ndvi_mean,frac_green_core) |> unique())
+  lmerTest::lmer(ndvi_mean ~ frac_green_core  + (1|subject), data = ahsg |> sf::st_drop_geometry() |> select(subject,h3, ndvi_mean,frac_green_core) |> unique())
 )
 
 
@@ -188,4 +214,30 @@ ahsgdt |> select(subject, ndvi_mean, frac_green_core) |>
   hrbrthemes::theme_ipsum()
 
 
+
+bb <- aa |> mutate_aoi_h3(lat = "lat", lon = "lon") |>
+  fetch_ndvi(
+    from = min(aa$timestamp),
+    to   = max(aa$timestamp),
+    out_dir = file.path("output/ndvi_10m_individual2", unique(aa$subject)),
+    client = oauth,
+    res_m = 10
+  ) |>
+  attach_ndvi() |>
+  attach_landuse(out_dir = "output/worldcover_individual2")  |> fetch_landuse(out_dir = "output/worldcover_individual2") 
+
+
+
+gps_data_Z313 <- gps_data_Z313 |>
+  mutate_aoi_h3(lat = "lat", lon = "lon") |>
+  fetch_ndvi(
+    from = min(gps_data_Z313$timestamp),
+    to   = max(gps_data_Z313$timestamp),
+    out_dir = "output/.ndvi",
+    client = oauth,
+    res_m = 10
+  ) |>
+  attach_ndvi() |>
+  fetch_landuse(out_dir = "output/.landuse") |>
+  attach_landuse()
 

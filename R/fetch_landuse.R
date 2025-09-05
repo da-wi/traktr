@@ -5,7 +5,7 @@
 #' for a given AOI. The AOI is split into 3°x3° grid tiles, and matching
 #' WorldCover TIFFs are downloaded to a local directory.
 #'
-#' @param aoi An `sf` polygon or multipolygon representing the AOI. Must have a valid CRS.
+#' @param df An `sf` polygon or multipolygon representing the AOI. Must have a valid CRS.
 #' @param out_dir Output directory where downloaded `.tif` files will be saved.
 #' @param wc_year WorldCover year, either `2020` or `2021` (default: `2021`).
 #' @param wc_version Version tag; `"v100"` for 2020 or `"v200"` for 2021 (default: `"v200"`).
@@ -31,7 +31,7 @@
 #' @seealso [https://esa-worldcover.org], [curl::curl_download()]
 #' @export
 fetch_landuse <- function(
-    aoi,
+    df,
     out_dir,
     wc_year = 2021,                 # 2020 (v100) or 2021 (v200)
     wc_version = "v200",            # "v100" for 2020, "v200" for 2021
@@ -39,6 +39,10 @@ fetch_landuse <- function(
     overwrite = FALSE,
     check_exists_remote = FALSE     # set TRUE to HEAD-check URL before downloading
 ){
+  cli::cli_progress_step("Fetching worldcover data from AWS", spinner = F, msg_done = "Fetching worldcover completed.")
+  
+  aoi <- attr(df, "traktr_aoi")
+  
   stopifnot(inherits(aoi, "sf"))
   if (is.na(sf::st_crs(aoi))) cli::cli_abort("`aoi` has no CRS; assign one first.")
   dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
@@ -59,7 +63,7 @@ fetch_landuse <- function(
   grid3 <- sf::st_make_grid(cover_sfc, cellsize = c(3,3), what = "polygons", square = TRUE) |>
     sf::st_as_sf()
   
-  # Keep grid cells that intersect your AOI (union to speed it up)
+    # Keep grid cells that intersect your AOI (union to speed it up)
   hits <- grid3[ sf::st_intersects(grid3, sf::st_union(aoi_ll), sparse = FALSE)[,1], , drop = FALSE]
   
   # Helper: tile code from lower-left corner (e.g., N48E006, S03W072)
@@ -74,7 +78,9 @@ fetch_landuse <- function(
     paste0(lat_tag, lon_tag)
   }
   
+
   codes <- unique(purrr::map_chr(hits$x, tile_code_from_poly))
+  
   
   s3_base <- "https://esa-worldcover.s3.eu-central-1.amazonaws.com"
   urls <- sprintf(
@@ -96,7 +102,6 @@ fetch_landuse <- function(
     })
   }
   # Download
-  cli::cli_progress_step("Fetching worldcover data from AWS", spinner = TRUE)
 
   results <- tibble::tibble(
     tile_id = codes,
@@ -111,14 +116,15 @@ fetch_landuse <- function(
         if (file.exists(d) && !overwrite) return("exists")
         # Try download
         ok_dl <- tryCatch({ curl::curl_download(u, d, mode = "wb", quiet = F); TRUE },
-                          error = function(e) { cli::cli_alert_warning("Download failed: {basename(d)} → {conditionMessage(e)}")
-; FALSE })
+                          error = function(e) { 
+                            cli::cli_alert_warning("Download failed: {basename(d)} → {conditionMessage(e)}"); FALSE }
+                         )
         if (!ok_dl) return("error")
         "downloaded"
       }),
       size_bytes = ifelse(file.exists(file), file.info(file)$size, NA_real_)
     )
-  cli::cli_progress_done()
+  
   
   cli::cli_alert_info(sprintf(
     "WorldCover tiles: %d total (%d downloaded, %d existed, %d missing, %d errors)",
@@ -127,9 +133,13 @@ fetch_landuse <- function(
     sum(results$status == "exists"),
     sum(results$status == "missing_remote"),
     sum(results$status == "error")
-  ))
+  ) )
   
-  attr(aoi, "worldcover_tiles") <- results
-  attr(aoi, "worldcover_aoi") <- aoi_ll
-  aoi
+  attr(df, "worldcover_tiles") <- results
+  attr(df, "worldcover_aoi") <- aoi_ll
+  
+  
+  cli::cli_progress_done()
+  
+  df
 }

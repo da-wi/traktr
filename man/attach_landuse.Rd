@@ -15,8 +15,9 @@ attach_landuse(
 )
 }
 \arguments{
-\item{df}{A data frame previously augmented with AOIs
-(class "ndvi_df", attributes "ndvi_aoi" and "ndvi_aoi_params").}
+\item{df}{A data frame of GPS or other observations that already has an AOI id
+column (e.g. created via \code{\link[=mutate_aoi_h3]{mutate_aoi_h3()}} or \code{\link[=mutate_aoi_buffer]{mutate_aoi_buffer()}}) and
+AOI metadata in \code{attr(df, "traktr_aoi")} and \code{attr(df, "traktr_aoi_params")}.}
 
 \item{out_dir}{Out dir
 If NULL, the function tries \code{attr(df, "worldcover")} or \code{attr(df, "landcover")}.}
@@ -42,7 +43,7 @@ Also adds attribute \code{attr(df, "landuse_table")} (per-AOI table).
 }
 \description{
 Computes per-class fractions from WorldCover (10 m, categorical) for each AOI
-stored in \code{attr(df, "ndvi_aoi")} and joins results back to \code{df} by the AOI id.
+stored in \code{attr(df, "traktr_aoi")} and joins results back to \code{df} by the AOI id.
 }
 \examples{
 # gps |> mutate_aoi_buffer(lat, lon, dist=75) |> fetch_worldcover() |> attach_landuse()

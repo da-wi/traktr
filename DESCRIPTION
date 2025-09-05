@@ -27,10 +27,8 @@ Imports:
     CDSE
 Suggests:
     ggplot2,
+    cartographr,
     scales,
-    testthat (>= 3.0.0),
-    withr,
-    digest
-Config/testthat/edition: 3
+    withr
 SystemRequirements: GDAL, GEOS, PROJ
 RoxygenNote: 7.3.2

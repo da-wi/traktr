@@ -9,7 +9,7 @@ attach_ndvi(df, out_dir, summary = "mean", drop_geometry = FALSE)
 \arguments{
 \item{df}{A data frame of GPS or other observations that already has an AOI id
 column (e.g. created via \code{\link[=mutate_aoi_h3]{mutate_aoi_h3()}} or \code{\link[=mutate_aoi_buffer]{mutate_aoi_buffer()}}) and
-AOI metadata in \code{attr(df, "ndvi_aoi")} and \code{attr(df, "ndvi_aoi_params")}.}
+AOI metadata in \code{attr(df, "traktr_aoi")} and \code{attr(df, "traktr_aoi_params")}.}
 
 \item{out_dir}{Directory containing previously fetched NDVI chip \code{.tif} files
 (as created by \code{\link[=fetch_ndvi]{fetch_ndvi()}}).}
@@ -27,7 +27,7 @@ If \code{drop_geometry = FALSE}, the result is an \code{sf} object with geometri
 }
 \description{
 Reads fetched NDVI chip files (GeoTIFFs), mosaics them into a virtual raster,
-extracts NDVI statistics per AOI (from \code{attr(df, "ndvi_aoi")}), and joins the
+extracts NDVI statistics per AOI (from \code{attr(df, "traktr_aoi")}), and joins the
 results back to the input tibble.
 }
 \details{

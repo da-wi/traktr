@@ -1,10 +1,11 @@
 #' Attach ESA WorldCover land-use composition per AOI (area-weighted)
 #'
 #' Computes per-class fractions from WorldCover (10 m, categorical) for each AOI
-#' stored in `attr(df, "ndvi_aoi")` and joins results back to `df` by the AOI id.
+#' stored in `attr(df, "traktr_aoi")` and joins results back to `df` by the AOI id.
 #'
-#' @param df A data frame previously augmented with AOIs
-#'           (class "ndvi_df", attributes "ndvi_aoi" and "ndvi_aoi_params").
+#' @param df A data frame of GPS or other observations that already has an AOI id
+#'   column (e.g. created via [mutate_aoi_h3()] or [mutate_aoi_buffer()]) and
+#'   AOI metadata in `attr(df, "traktr_aoi")` and `attr(df, "traktr_aoi_params")`.
 #' @param out_dir Out dir
 #'           If NULL, the function tries `attr(df, "worldcover")` or `attr(df, "landcover")`.
 #' @param exact Use area-weighted extraction (`terra::extract(..., exact=TRUE)`).
@@ -31,34 +32,57 @@ attach_landuse <- function(df,
                            prefix = "lc_") {
   rlang::check_installed(c("sf","terra","dplyr","tidyr","purrr","cli"))
   
-  cli::cli_progress_step(paste0("Summarizing landuse data"), spinner = TRUE)
-  aoi <- attr(df, "ndvi_aoi")
+  #pb <- cli::cli_progress_bar(
+  #  name   = "attach_landuse()", 
+  #  total  = 3,                                   # number of major steps
+  #  clear  = FALSE,                               # keep final line; set TRUE to remove
+  #  format = "{cli::pb_spin} {name} | {msg} {pb} {n}/{total}  {eta}"
+  #)
+  pb <- cli::cli_progress_bar("attach_landuse()",
+                              total = 3,
+                              type = "iterator", 
+                              clear = F,
+                              status = "attach_landuse()",
+                              format = "{cli::pb_spin} {cli::pb_name} | {cli::pb_status} {cli::pb_bar} {cli::pb_current}/{cli::pb_total}  {cli::pb_eta}",
+                              format_done = "{cli::col_green(cli::symbol$tick)} Summarized landuse data {cli::style_dim(paste0('[', cli::pb_elapsed, ']'))}"
+  )
+  on.exit(cli::cli_progress_done(pb), add = TRUE) # always close, even on error
+  
+  #cli::cli_progress_step("Summarizing landuse data", spinner = F, msg_done = "Landuse data written. ")
+  cli::cli_progress_update(pb, set = 1, status = "Validating AOIs", force = TRUE)
+  #cli::cli_progress_message(msg = "Validating AOIs1" )
+  
+  aoi <- attr(df, "traktr_aoi")
   if (is.null(aoi) || !"sf" %in% class(aoi)) {
-    rlang::abort("No AOI found – call a mutate_aoi_*() function first.")
+    cli::cli_abort("No AOI found – call a mutate_aoi_*() function first.")
   }
-  params <- attr(df, "ndvi_aoi_params")
+  params <- attr(df, "traktr_aoi_params")
   id_col <- if (!is.null(params) && !is.null(params$id_col)) params$id_col else {
     # fallback: first non-geometry column in AOI
     setdiff(names(aoi), attr(aoi, "sf_column"))[1]
   }
+
   if (is.null(id_col) || !id_col %in% names(aoi))
-    rlang::abort("Cannot determine AOI id column; set attr(df, 'ndvi_aoi_params')$id_col.")
+    cli::cli_abort("Cannot determine AOI id column; set attr(df, 'traktr_aoi_params')$id_col.")
   
   # ensure df has the id column to join on
   if (!id_col %in% names(df)) {
-    rlang::abort(paste0("Input df does not contain AOI id column '", id_col, "'."))
+    cli::cli_abort(paste0("Input df does not contain AOI id column '", id_col, "'."))
   }
   
   tiles <- attr(df, "worldcover_tiles")
   if (is.null(tiles)) {
     files <- list.files(out_dir, "\\.tif$", full.names = TRUE)
-    if (!length(files)) rlang::abort("No worldcover files found (empty out_dir).")
+    if (!length(files)) cli::cli_abort("No worldcover files found (empty out_dir).")
   } else {
     files <- dplyr::filter(tiles, !is.na(.data$file))$file
-    if (!length(files)) rlang::abort("No worldcover files recorded in attr(df,'worldcover').")
+    if (!length(files)) cli::cli_abort("No worldcover files recorded in attr(df,'worldcover_tiles').")
   }
   
-  # ---- 1) Optional deduplication of AOIs to save work ----
+  if(".aoi_row" %in% names(df)) { df <- dplyr::select(-.aoi_row) }
+  
+
+  # Optional deduplication of AOIs to save work
   aoi <- sf::st_make_valid(aoi)
   aoi4326 <- sf::st_transform(aoi, 4326)
   
@@ -70,6 +94,7 @@ attach_landuse <- function(df,
       dplyr::distinct(h3, .keep_all = T)
   }
   
+
   if (deduplicate) {
     aoi4326$.__wkb <- vapply(sf::st_as_binary(aoi4326$geometry), paste, "", collapse = "")
     aoi_unique <- aoi4326 |>
@@ -84,44 +109,110 @@ attach_landuse <- function(df,
     map_back <- sf::st_drop_geometry(aoi_unique)[, c(id_col, ".aoi_row")]
   }
   
-  # ---- 2) Area (for reference) ----
+  # Area (for reference)
   aoi_area <- aoi_unique |>
     sf::st_transform(crs_planar) |>
     dplyr::transmute(.aoi_row, aoi_area_m2 = as.numeric(sf::st_area(geometry))) |>
     sf::st_drop_geometry()
   
-  # ---- 3) Extract categorical values with area weights ----
-  #cli::cli_progress_step("Extracting WorldCover per AOI")
-  
-  files <- list.files(out_dir, "\\.tif$", full.names = TRUE)
+  # Extract categorical values with area weights
 
+  # files <- list.files(out_dir, "\\.tif$", full.names = TRUE)
+
+  # Extract categorical values with area weights (fast path via exactextractr)
   wc <- terra::vrt(terra::sprc(files))
   
-  # Keep name of the categorical band
-  wc_band <- names(wc)[1]
-  ext <- terra::extract(wc, terra::vect(aoi_unique), exact = exact, cells = TRUE)
-  # ext: columns: ID (row idx of aoi_unique), cell, <band>, fraction
-  names(ext)[names(ext) == wc_band] <- "lc"
-  ext <- dplyr::as_tibble(ext) |>
-    dplyr::filter(!is.na(lc), fraction > 0)
+  # require exactextractr for the fast callback approach
+  rlang::check_installed("exactextractr")
   
-  # total covered fraction per AOI (handle NODATA / partial coverage)
-  cov_tbl <- ext |>
-    dplyr::group_by(ID) |>
-    dplyr::summarise(weight_sum = sum(fraction), .groups = "drop") |>
-    dplyr::rename(.aoi_row = ID)
+  # callback: for one polygon, receives (values, coverage_fraction)
+  # returns a one-row data.frame with columns lc_<code> containing summed coverage fractions
+  cat_summary_fn <- function(values, coverage_fraction) {
+    valid <- !is.na(values) & coverage_fraction > 0
+    values <- values[valid]
+    weights <- coverage_fraction[valid]
+    
+    if (length(values) == 0L) {
+      return(data.frame()) # no data for this AOI -> exact_extract will produce an empty row
+    }
+    
+    # weighted sum of coverage per category (values are integer class codes)
+    tab <- tapply(weights, values, sum)
+    if (length(tab) == 0L) return(data.frame())
+    
+    nm <- paste0(prefix, names(tab))
+    df <- as.data.frame(as.list(setNames(as.numeric(tab), nm)))
+    df
+  }
   
-  # ---- 4) Per-class fractions (normalized within AOI) ----
-  comp_long <- ext |>
-    dplyr::group_by(ID, lc) |>
-    dplyr::summarise(w = sum(fraction), .groups = "drop") |>
-    dplyr::rename(.aoi_row = ID) |>
-    dplyr::left_join(cov_tbl, by = ".aoi_row") |>
-    dplyr::mutate(p = dplyr::if_else(weight_sum > 0, w / weight_sum, NA_real_)) |>
-    dplyr::select(.aoi_row, lc, p) |>
-    dplyr::distinct()
+  cli::cli_progress_update(pb, set = 2, status = "Building VRT / reading tiles", force = T)
   
+  # run exact_extract with our callback -> returns one-row summary per AOI (columns vary by classes present)
+  per_aoi_class_sums <- exactextractr::exact_extract(
+    wc,
+    aoi_unique,
+    fun = cat_summary_fn,
+    progress = FALSE
+  )
   
+  # exact_extract may return a list or data.frame depending on callback; normalize to data.frame
+  if (is.list(per_aoi_class_sums) && !is.data.frame(per_aoi_class_sums)) {
+    # bind rows; missing columns will become NA (we'll set to 0)
+    per_aoi_class_sums <- do.call(
+      what = function(...) dplyr::bind_rows(list(...)),
+      args = per_aoi_class_sums
+    )
+  }
+  
+  # Ensure we have one row per AOI in same order as aoi_unique
+  # If exact_extract produced fewer rows (rare), pad with empty rows
+  n_aoi <- nrow(aoi_unique)
+  if (nrow(per_aoi_class_sums) < n_aoi) {
+    missing_rows <- n_aoi - nrow(per_aoi_class_sums)
+    per_aoi_class_sums <- dplyr::bind_rows(
+      per_aoi_class_sums,
+      as.data.frame(matrix(NA, nrow = missing_rows, ncol = ncol(per_aoi_class_sums)))
+    )
+    names(per_aoi_class_sums) <- names(per_aoi_class_sums)
+  }
+  
+  # replace NA with 0 (no coverage for that class in that AOI)
+  if (ncol(per_aoi_class_sums) > 0) per_aoi_class_sums[is.na(per_aoi_class_sums)] <- 0
+  
+  # add .aoi_row so downstream joins work exactly like before
+  per_aoi_class_sums$.aoi_row <- seq_len(n_aoi)
+  
+  # build cov_tbl: total covered fraction per AOI (sum over all lc_* columns)
+  lc_cols <- grep(paste0("^", prefix), names(per_aoi_class_sums), value = TRUE)
+  if (length(lc_cols) == 0L) {
+    cov_tbl <- data.frame(.aoi_row = per_aoi_class_sums$.aoi_row,
+                          weight_sum = numeric(n_aoi))
+    comp_long <- dplyr::tibble(.aoi_row = integer(0), lc = integer(0), p = numeric(0))
+  } else {
+    weight_sum <- rowSums(per_aoi_class_sums[, lc_cols, drop = FALSE], na.rm = TRUE)
+    cov_tbl <- data.frame(.aoi_row = per_aoi_class_sums$.aoi_row,
+                          weight_sum = weight_sum)
+    
+    # melt per_aoi_class_sums into long (.aoi_row, lc, w)
+    comp_long <- per_aoi_class_sums |>
+      dplyr::select(.aoi_row, dplyr::all_of(lc_cols)) |>
+      tidyr::pivot_longer(
+        cols = dplyr::starts_with(prefix),
+        names_to = "lc_name",
+        values_to = "w"
+      ) |>
+      dplyr::mutate(
+        lc = as.integer(sub(prefix, "", lc_name))
+      ) |>
+      dplyr::filter(!is.na(w) & w > 0) |>
+      dplyr::select(.aoi_row, lc, w) |>
+      dplyr::left_join(cov_tbl, by = ".aoi_row") |>
+      dplyr::mutate(p = dplyr::if_else(weight_sum > 0, w / weight_sum, NA_real_)) |>
+      dplyr::select(.aoi_row, lc, p) |>
+      dplyr::distinct()
+  }
+  
+
   comp_wide <- comp_long |>
     dplyr::mutate(lc_name = paste0(prefix, lc)) |>
     tidyr::pivot_wider(
@@ -130,8 +221,8 @@ attach_landuse <- function(df,
       values_from= p,
       values_fill= 0
     )
-  
-  # ---- 5) Rollups + Shannon diversity ----
+
+  # Rollups + Shannon diversity 
   # ESA WorldCover v200 codes
   veg_core <- c(10, 20, 30, 90, 95, 100)
   veg_plus <- if (include_cropland) c(veg_core, 40) else veg_core
@@ -146,6 +237,7 @@ attach_landuse <- function(df,
     rowSums(df[, cols, drop = FALSE], na.rm = TRUE)
   }
   
+  cli::cli_progress_update(id=pb, set = 3, status = "Rollups & Shannon / join", force= T)
   stats_tbl <- comp_wide |>
     dplyr::rowwise() |>
     dplyr::mutate(
@@ -161,7 +253,7 @@ attach_landuse <- function(df,
     ) |>
     dplyr::ungroup()
   
-  # ---- 6) Bring everything together per AOI row ----
+  # Bring everything together per AOI row 
   per_aoi <- aoi_unique |>
     sf::st_drop_geometry() |>
     dplyr::select(.aoi_row, !!id_col) |>
@@ -175,14 +267,12 @@ attach_landuse <- function(df,
     dplyr::left_join(per_aoi, by = id_col) |>
     dplyr::select(-dplyr::any_of(c(".__wkb")))
   
-  # ---- 7) Join to df ----
+  # Join to df 
   out <- df |>
-    dplyr::left_join(per_aoi_full, by = id_col)
+    dplyr::left_join(per_aoi_full, by = id_col) |>
+    dplyr::select(-c(.aoi_row,weight_sum,aoi_area_m2)) |>
+    relocate(geometry, .after = dplyr::last_col())
   
-  cli::cli_progress_done()
-  
-  # keep a tidy per-AOI table as attribute
-  # attr(out, "landuse_table") <- per_aoi
   out
   
 }

@@ -1,0 +1,155 @@
+---
+title: "Introduction to traktr"
+output: 
+  rmarkdown::html_vignette:
+    self_contained: yes
+    keep_md: yes
+vignette: >
+  %\VignetteIndexEntry{Introduction to traktr}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+  
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  echo=TRUE,
+  message=FALSE,
+  warning=FALSE,
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+In this vignette, you will learn see a basic workflow with the package for one individual. 
+
+### Setup OAuth for Sentinel-2
+
+After installing, you should create an account on https://shapps.dataspace.copernicus.eu/dashboard/#/account/settings and create an OAuth Client there. 
+
+If you did this, set up your `.Renviron` file, that includes the environmental variables for CDSE and the GPS data directory. 
+
+```{r eval=FALSE}
+CDSE_CLIENT_ID=myid
+CDSE_CLIENT_SECRET=mysecret
+GPS_SMB_ROOT="//myserver/GPS"
+```
+
+After adapting the files, read in the environment variables by calling
+
+```{r eval=FALSE}
+readRenviron(".Renviron")
+
+# check
+Sys.getenv("CDSE_CLIENT_ID", "")
+```
+
+To fetch satellite imagery from CDSE, we need to create an OAuthClient with the credentials from our account. 
+These are the credentials you have to put in `.Renviron`.
+
+```{r eval=FALSE}
+oauth <- CDSE::GetOAuthClient(id = Sys.getenv("CDSE_CLIENT_ID", ""),
+                              secret = Sys.getenv("CDSE_CLIENT_SECRET", ""))
+
+```
+
+### Read GPS data files
+
+You can use `read_gps_csv()` to automatically read in all `*.csv` files. The function will look for 
+files in your `GPS_SMB_ROOT` directory. 
+
+```{r eval=FALSE}
+gps_data <- read_gps_csv(pattern = "^Z.*\\.csv$") |> 
+  dplyr::select(subject, timestamp, lat, lon, direction, speed)
+```
+
+### Fetch data from CDSE
+
+After that, we can simply retrieve the NDVI and landuse data from the CDSE/AWS servers for participant Z313.
+
+```{r eval=FALSE}
+gps_data_Z313 <- gps_data |> 
+  filter(subject=="Z313")
+
+gps_data_Z313 <- gps_data_Z313 |>
+  mutate_aoi_h3(lat = "lat", lon = "lon") |>
+  fetch_ndvi(
+    from = min(gps_data_Z313$timestamp),
+    to   = max(gps_data_Z313$timestamp),
+    out_dir = "output/.ndvi",
+    client = oauth,
+    res_m = 10
+  ) |>
+  attach_ndvi() |>
+  fetch_landuse(out_dir = "output/.landuse") |>
+  attach_landuse()
+```
+
+### Simple visualization
+
+```{r eval=FALSE}
+library(ggplot2)
+
+ggplot(gps_data_Z313 |> select(h3, ndvi_mean, geometry) |> unique(),
+       aes(fill = ndvi_mean)) +
+  geom_sf(color = NA) +
+  scale_fill_gradient2(
+    midpoint = 0.5,
+    low = "brown",
+    mid = "#E7D6A4",
+    high = "darkgreen",
+    limits = c(0,1)
+  )+
+  labs(fill = "NDVI")+
+  # remove coordinates for pricavy
+  theme_void()
+```
+
+
+### Visualization with `cartographr`
+
+```{r eval=FALSE}
+library(ggplot2)
+library(cartographr)
+
+osm <- get_osmdata(bbox = attr(gps_data_Z313, "traktr_aoi")  |> sf::st_bbox())
+set_attribution(F)
+set_output_size(size = "A3", orientation = "landscape")
+
+{
+  p <- osm |> plot_map("swiss") 
+  pm <- p +
+    ggnewscale::new_scale_fill()+
+    geom_sf(data= gps_data_Z313 |>
+              select(geometry, ndvi_mean, frac_green_core, h3) |> 
+              unique(),
+            aes(fill = ndvi_mean), 
+            color = NA, alpha = 0.6)+
+    scale_fill_gradient2(
+      low = "brown",midpoint = 0.5,
+      mid = "#E7D6A4",
+      high = "darkgreen",
+      name = "values",
+      limits = c(0,1),
+      breaks = c(0,0.5,1)
+    )+
+    cartographr:::adjust_viewport(p)+
+    cartographr::theme_infomap()
+}
+
+save_map(pm, filename = "output/Z313_ndvi.pdf")
+
+ggplot(gps_data_Z313 |> select(h3, ndvi_mean, geometry) |> unique(),
+       aes(fill = ndvi_mean)) +
+  geom_sf(color = NA) +
+  scale_fill_gradient2(
+    midpoint = 0.5,
+    low = "brown",
+    mid = "#E7D6A4",
+    high = "darkgreen",
+    limits = c(0,1)
+  )+
+  labs(fill = "NDVI")+
+  # remove coordinates for pricavy
+  theme_void()
+```
+

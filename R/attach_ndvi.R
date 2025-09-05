@@ -1,12 +1,12 @@
 #' Attach NDVI summaries back to the input data frame
 #'
 #' Reads fetched NDVI chip files (GeoTIFFs), mosaics them into a virtual raster,
-#' extracts NDVI statistics per AOI (from `attr(df, "ndvi_aoi")`), and joins the
+#' extracts NDVI statistics per AOI (from `attr(df, "traktr_aoi")`), and joins the
 #' results back to the input tibble.
 #'
 #' @param df A data frame of GPS or other observations that already has an AOI id
 #'   column (e.g. created via [mutate_aoi_h3()] or [mutate_aoi_buffer()]) and
-#'   AOI metadata in `attr(df, "ndvi_aoi")` and `attr(df, "ndvi_aoi_params")`.
+#'   AOI metadata in `attr(df, "traktr_aoi")` and `attr(df, "traktr_aoi_params")`.
 #' @param out_dir Directory containing previously fetched NDVI chip `.tif` files
 #'   (as created by [fetch_ndvi()]).
 #' @param summary Summary function to apply in \pkg{exactextractr}
@@ -18,7 +18,7 @@
 #' @details
 #' The function:
 #' \enumerate{
-#'   \item Collects NDVI chip files either from `attr(df,"ndvi_tiles")` or by
+#'   \item Collects NDVI chip files either from `attr(df,"ndvi_aoi")` or by
 #'   listing `out_dir`.
 #'   \item Builds a lazy mosaic (VRT) using \pkg{terra}.
 #'   \item Reprojects the AOIs to match the raster CRS.
@@ -51,32 +51,34 @@
 #' @seealso [mutate_aoi_h3()], [mutate_aoi_buffer()], [fetch_ndvi()]
 #' @export
 attach_ndvi <- function(df, out_dir, summary = "mean", drop_geometry = FALSE) {
-  cli::cli_progress_step(paste0("Summarizing data using ",summary, " function"), spinner = TRUE)
-  aoi <- attr(df, "ndvi_aoi")
+  cli::cli_progress_step("Summarizing NDVI data using {cli::col_blue(summary)}",
+                         msg_done = "Summarized NDVI data using {cli::col_blue(summary)}",
+                         spinner = TRUE)
+  aoi <- attr(df, "traktr_aoi")
   if (is.null(aoi) || !"sf" %in% class(aoi)) {
     rlang::abort("No AOI found – call a mutate_aoi_*() function first.")
   }
-  params <- attr(df, "ndvi_aoi_params")
+  params <- attr(df, "traktr_aoi_params")
   id_col <- if (!is.null(params) && !is.null(params$id_col)) params$id_col else {
     # fallback: first non-geometry column in AOI
     setdiff(names(aoi), attr(aoi, "sf_column"))[1]
   }
   if (is.null(id_col) || !id_col %in% names(aoi))
-    rlang::abort("Cannot determine AOI id column; set attr(df, 'ndvi_aoi_params')$id_col.")
+    rlang::abort("Cannot determine AOI id column; set attr(df, 'traktr_aoi_params')$id_col.")
   
   # ensure df has the id column to join on
   if (!id_col %in% names(df)) {
     rlang::abort(paste0("Input df does not contain AOI id column '", id_col, "'."))
   }
   
-  # --- 2) Collect chip files -------------------------------------------
-  tiles <- attr(df, "ndvi_tiles")
+  # Collect chip files
+  tiles <- attr(df, "ndvi_aoi")
   if (is.null(tiles)) {
     files <- list.files(out_dir, "\\.tif$", full.names = TRUE)
     if (!length(files)) rlang::abort("No NDVI files found (empty out_dir).")
   } else {
     files <- dplyr::filter(tiles, !is.na(.data$file))$file
-    if (!length(files)) rlang::abort("No NDVI files recorded in attr(df,'ndvi_tiles').")
+    if (!length(files)) rlang::abort("No NDVI files recorded in attr(df,'ndvi_aoi').")
   }
   
   if ("geometry" %in% names(df)) {
@@ -107,6 +109,6 @@ attach_ndvi <- function(df, out_dir, summary = "mean", drop_geometry = FALSE) {
   if (drop_geometry == TRUE) {
     df |> sf::st_drop_geometry()
   } else {
-    df |> dplyr::relocate(geometry, .after = last_col()) |> sf::st_as_sf()
+    df |> dplyr::relocate(geometry, .after = dplyr::last_col()) |> sf::st_as_sf()
   }
 }

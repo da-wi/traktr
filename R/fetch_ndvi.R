@@ -60,23 +60,23 @@ make_request_tiles <- function(aoi, res_m = 20, max_px = 2500,
   stopifnot(inherits(aoi, "sf") || inherits(aoi, "sfc"))
   
   aoi_m <- aoi |>
-    st_make_valid() |>
-    st_transform(crs_metric)
+    sf::st_make_valid() |>
+    sf::st_transform(crs_metric)
   
   # Ziel-Kantenlänge je Kachel (Meter)
   tile_size_m <- (max_px - 2*overlap_px) * res_m
   ov_m <- overlap_px * res_m
   
   # Grid nur über die AOI-BBox
-  grid <- st_make_grid(aoi_m,
+  grid <- sf::st_make_grid(aoi_m,
                        cellsize = c(tile_size_m, tile_size_m),
                        what = "polygons", square = TRUE)
   
-  grid_sf <- st_as_sf(grid) |>
-    mutate(tile_id = row_number())
+  grid_sf <- sf::st_as_sf(grid) |>
+    dplyr::mutate(tile_id = row_number())
   
   # nur Zellen behalten, die AOI schneiden
-  has_int <- lengths(st_intersects(grid_sf, aoi_m)) > 0
+  has_int <- lengths(sf::st_intersects(grid_sf, aoi_m)) > 0
   grid_sel <- grid_sf[has_int, , drop = FALSE]
   
   grid_sel_buf_geom <- if (ov_m > 0) {
@@ -91,16 +91,16 @@ make_request_tiles <- function(aoi, res_m = 20, max_px = 2500,
   suppressWarnings({
     aoi_union <- sf::st_union(sf::st_geometry(aoi_m))
     # auf AOI clippen => "leere" Bereiche entfallen
-    chips_m <- st_intersection(st_as_sf(grid_sel_buf), aoi_union) |>
-      st_make_valid() |>
+    chips_m <- sf::st_intersection(st_as_sf(grid_sel_buf), aoi_union) |>
+      sf::st_make_valid() |>
       mutate(tile_id = grid_sel$tile_id)
   })
   
   # Tiny slivers entfernen
   chips_m <- suppressWarnings(
     chips_m |>
-      mutate(area_m2 = as.numeric(sf::st_area(sf::st_geometry(chips_m)))) |>
-      filter(area_m2 >= min_area_m2) |>
+      dplyr::mutate(area_m2 = as.numeric(sf::st_area(sf::st_geometry(chips_m)))) |>
+      dplyr::filter(area_m2 >= min_area_m2) |>
       sf::st_as_sf()
   )
   
@@ -128,7 +128,6 @@ make_request_tiles <- function(aoi, res_m = 20, max_px = 2500,
   chips_4326 <- st_transform(chips_m, 4326)
   
   cli::cli_progress_done()
-  
   
   list(
     chips_metric = chips_m,   # EPSG:3857 (Pixelmaße stimmen zu res_m in m)
@@ -225,7 +224,7 @@ fetch_ndvi <- function(df, from, to, out_dir,
                        overwrite = FALSE) {
   rlang::check_installed(c("cli","ratelimitr","purrr","tibble","dplyr","sf","glue"))
   
-  aoi <- attr(df, "ndvi_aoi")
+  aoi <- attr(df, "traktr_aoi")
   if (is.null(aoi) || !"sf" %in% class(aoi)) {
     rlang::abort("No AOI found – please call a mutate_aoi_*() function first.")
   }
@@ -237,38 +236,70 @@ fetch_ndvi <- function(df, from, to, out_dir,
   if (!n_tiles) rlang::abort("No tiles to request (AOI too small or filtered).")
   idx <- seq_len(n_tiles)
   
+  sanitize <- function(x) gsub("[-.]", "_", format(x, scientific = FALSE))
+  
   # 2) Safe + Rate-limit
   safe_one <- purrr::safely(function(i) {
-    out_file <- file.path(out_dir, sprintf("ndvi_%06d.tif", tiles$chips_wgs84$tile_id[i]))
-    if (!overwrite && file.exists(out_file)) {
-      cli::cli_alert_info(sprintf("Skipping tile %i, already exists.", i))
-      return(tibble::tibble(tile_id = tiles$chips_wgs84$tile_id[i],
-                            file = out_file, status = "skipped"))
-    }
+    bbox <- sf::st_bbox(tiles$chips_wgs84[i, ])
+    
+    filename <- glue::glue(
+      "ndvi_{sanitize(bbox$xmin)}_{sanitize(bbox$ymin)}_{sanitize(bbox$xmax)}_{sanitize(bbox$ymax)}_{as.character(as.Date(from))}_{as.character(as.Date(to))}.tif"
+    )
+    
+    out_file <- file.path(out_dir, filename)
+    
+    #out_file <- file.path(out_dir, sprintf("ndvi_%06d.tif", tiles$chips_wgs84$tile_id[i]))
+    
     cdse_fetch_chip(tiles$chips_wgs84[i, ], from, to, evalscript, out_file,  resolution = res_m, client = client)
   })
+  
+  
   limited <- ratelimitr::limit_rate(safe_one, ratelimitr::rate(n = rate_n, period = rate_period))
   
   # 3) Fortschritt
-  cli::cli_progress_step("Fetching data from CDSE", spinner = TRUE)
+  skipped <- 0
+  cli::cli_progress_step("Fetching data from CDSE",
+                         msg_done = "Fetching NDVI data completed", spinner = TRUE)
+  
   pb <- cli::cli_progress_bar(total = n_tiles,
-                              format = "Downloading {cli::pb_bar} {cli::pb_percent}",
+                              format = "Downloading {cli::pb_bar} {cli::pb_percent} (skipped {skipped})",
                               clear = FALSE)
   
   res_list <- vector("list", n_tiles)
   for (j in seq_along(idx)) {
     i <- idx[j]
-    ans <- limited(i)
     
-    if (!is.null(ans$error)) {
-      res_list[[j]] <- tibble::tibble(
-        tile_id = tiles$chips_wgs84$tile_id[i],
-        file    = NA_character_,
-        status  = "error",
-        msg     = paste(ans$error)
-      )
+    bbox <- sf::st_bbox(tiles$chips_wgs84[i, ])
+    
+    filename <- glue::glue(
+      "ndvi_{sanitize(bbox$xmin)}_{sanitize(bbox$ymin)}_{sanitize(bbox$xmax)}_{sanitize(bbox$ymax)}_{as.character(as.Date(from))}_{as.character(as.Date(to))}.tif"
+    )
+    
+    out_file <- file.path(out_dir, filename)
+    
+    #out_file <- file.path(out_dir, sprintf("ndvi_%06d.tif", tiles$chips_wgs84$tile_id[i]))
+    
+    if (!overwrite && file.exists(out_file)) {
+      skipped <- skipped + 1
+      res_list[[j]] <- tibble::tibble(tile_id = tiles$chips_wgs84$tile_id[i],
+                            file = out_file, status = "skipped")
     } else {
-      res_list[[j]] <- ans$result
+        if (is.null(client )) {
+          cli::cli_abort("No OAuth client set. ")
+        } else {
+          ans <- limited(i)
+        }
+        
+        if (!is.null(ans$error)) {
+          res_list[[j]] <- tibble::tibble(
+            tile_id = tiles$chips_wgs84$tile_id[i],
+            file    = NA_character_,
+            status  = "error",
+            msg     = paste(ans$error)
+          )
+        } else {
+          res_list[[j]] <- ans$result
+        }
     }
     cli::cli_progress_update(id = pb)
   }
@@ -288,14 +319,14 @@ fetch_ndvi <- function(df, from, to, out_dir,
     by = "tile_id"
   )
   tile_index <- sf::st_as_sf(tile_index)
-  attr(df, "ndvi_tiles") <- tile_index
+  attr(df, "ndvi_aoi") <- tile_index
   attr(df, "ndvi_fetch_params") <- list(
     from = as.Date(from), to = as.Date(to),
     out_dir = out_dir, res_m = res_m, max_px = max_px, overlap_px = overlap_px,
     evalscript = evalscript, rate_n = rate_n, rate_period = rate_period,
     overwrite = overwrite
   )
-  class(df) <- union("ndvi_df", class(df))
+  class(df) <- union("traktr_df", class(df))
   invisible(df)
 }
 
@@ -343,6 +374,7 @@ cdse_fetch_chip <- function(aoi_wgs84,
     client           = client
   )
   
+  print(out_file)
   # write result
   if (is.raw(res)) {
     writeBin(res, out_file)

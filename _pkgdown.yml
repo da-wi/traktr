@@ -1,31 +1,48 @@
 template:
   bootstrap: 5
-  bootswatch: flatly
-  bslib:
-    base_font: {google: "Inter"}
-    fg: "#222222"
-    bg: "#f7f7f7"
-    primary: "#0055aa"
   light-switch: true
+
+# Optional but nice to have
+url: https://github.com/da-wi/traktr
+development:
+  mode: auto
 
 navbar:
   structure:
-    left: [home, reference, articles]
+    left: [home, get-started, reference, articles]
     right: [github]
+  components:
+    get-started:
+      text: Getting started
+      href: articles/traktr.html
+    github:
+      icon: fab fa-github
+      href: https://github.com/da-wi/traktr
 
 reference:
-  - title: "AOI setup"
+  - title: "Import GPS data"
+    desc: >
+      Read raw GPS CSV files into a tidy tibble
     contents:
-      - mutate_aoi_h3
+      - read_gps_csv
+
+  - title: "Define areas of interest"
+    desc: >
+      Create the spatial units used for exposure and store metadata for later steps.
+    contents:
       - mutate_aoi_buffer
-  - title: "Data retrieval"
+      - mutate_aoi_h3
+
+  - title: "Fetch satellite layers"
+    desc: >
+      Download remote rasters for your areas of interest. Handles tiling and rate-limits under the hood.
     contents:
       - fetch_ndvi
       - fetch_landuse
-  - title: "Data retrieval"
+
+  - title: "Attach & aggregate exposures"
+    desc: >
+      Compute ready-to-model features. 
     contents:
       - attach_ndvi
-      - attach_landuse    
-  - title: "GPS CSV data"
-    contents:
-      - read_gps_csv
+      - attach_landuse

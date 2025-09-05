@@ -80,14 +80,14 @@ mutate_aoi_h3 <- function(df, lat = "lat", lon = "lon", res = 10, .name = "h3") 
   #  sf::st_make_valid()
   
   # store AOIs and parameters on df
-  attr(df, "ndvi_aoi") <- dplyr::select(aoi, !!id_sym, geometry)
-  attr(df, "ndvi_aoi_params") <- list(
+  attr(df, "traktr_aoi") <- dplyr::select(aoi, !!id_sym, geometry)
+  attr(df, "traktr_aoi_params") <- list(
     method = "h3",
     res = res,
     id_col = .name
   )
   
-  class(df) <- union("ndvi_df", class(df))
+  class(df) <- union("traktr_df", class(df))
   cli::cli_progress_done()
   
   
@@ -143,7 +143,7 @@ mutate_aoi_h3 <- function(df, lat = "lat", lon = "lon", res = 10, .name = "h3") 
 #' @family AOI functions
 #' @rdname mutate_aoi_buffer
 #' @export
-mutate_aoi_buffer <- function(df, lat, lon,
+mutate_aoi_buffer <- function(df, lat = "lat", lon = "lon",
                               dist = 100,
                               .name = "aoi_id",
                               crs_planar = 3857) {
@@ -192,8 +192,8 @@ mutate_aoi_buffer <- function(df, lat, lon,
   # Store AOIs (only the necessary columns) as attribute
   aoi_attr <- aoi |> dplyr::select(dplyr::all_of(.name), geometry)
   
-  attr(df, "ndvi_aoi") <- aoi_attr
-  attr(df, "ndvi_aoi_params") <- list(
+  attr(df, "traktr_aoi") <- aoi_attr
+  attr(df, "traktr_aoi_params") <- list(
     method = "buffer",
     dist_m = dist,
     crs_planar = crs_planar,
@@ -201,7 +201,7 @@ mutate_aoi_buffer <- function(df, lat, lon,
   )
   
   # Mark class for downstream verbs
-  class(df) <- union("ndvi_df", class(df))
+  class(df) <- union("traktr_df", class(df))
   
   cli::cli_progress_done()
   

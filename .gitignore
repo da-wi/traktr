@@ -11,6 +11,7 @@ tile_cache/
 old/
 analysis.R
 docs/
+data/
 
 .RDataTmp
 
