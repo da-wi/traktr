@@ -4,38 +4,43 @@
 \alias{read_gps_csv}
 \title{Read GPS CSV files into a single tibble}
 \usage{
-read_gps_csv(pattern)
+read_gps_csv(pattern, dir = NULL)
 }
 \arguments{
-\item{pattern}{Regular expression used to match filenames in the GPS data directory.
-Must match files whose names contain a subject ID like "Z001".}
+\item{pattern}{Regular expression used to match filenames containing GPS data.
+Filenames must contain a subject ID like "Z001".}
+
+\item{dir}{Optional path to a directory containing the GPS files. If supplied,
+this overrides the \code{GPS_SMB_ROOT} environment variable. If not supplied,
+the function attempts to use the \code{GPS_SMB_ROOT} environment variable.}
 }
 \value{
-A tibble with one row per GPS observation, including at least columns
-\code{subject}, \code{timestamp}, \code{lat}, and \code{lon} (if present). Additional columns are preserved.
+A tibble with one row per GPS observation. Includes at least the columns
+\code{subject}, \code{timestamp}, \code{lat}, and (if present) \code{lon}. Additional columns are preserved.
 }
 \description{
-Reads subject-level GPS CSV files from a source directory. Matches filenames
-against a regex pattern and concatenates them into one tibble.
+Reads subject-level GPS CSV files from a directory, matching filenames
+against a regex pattern and concatenating them into one tibble.
 }
 \details{
-Each CSV must contain at least columns \code{timestamp}, \code{lat}, and
-either \code{lon} or \code{lng}. If a \code{lng} column is present, it is renamed
-to \code{lon}. A \code{subject} column is created from the filename.
+Each CSV must contain at least columns \code{timestamp} and \code{lat}, and either
+\code{lon} or \code{lng}. If a \code{lng} column is present, it is renamed to \code{lon}.
+A \code{subject} column is extracted from the filename using a regex pattern.
 
-Progress is displayed with \pkg{cli}. All files are read with
-\pkg{readr::read_csv()} with \code{show_col_types = FALSE}.
+If both \code{dir} and the \code{GPS_SMB_ROOT} environment variable are missing or empty,
+the function will abort with an informative error.
+
+Progress is displayed using the \pkg{cli} package. Files are read with
+\code{\link[readr:read_delim]{readr::read_csv()}} using \code{show_col_types = FALSE}.
 }
-\section{SMB source}{
-
-This function requires an environment variable \code{GPS_SMB_ROOT} to be set,
-pointing to the base directory containing GPS CSV files (e.g., a mounted SMB path).
-}
-
 \examples{
 \dontrun{
-# Requires access to SMB share configured in ~/.Renviron
+# Using GPS_SMB_ROOT set in ~/.Renviron
 gps <- read_gps_csv(pattern = "^Z001.*\\\\.csv$")
+
+# Or explicitly specify a directory
+gps <- read_gps_csv(pattern = "^Z001.*\\\\.csv$", dir = "/path/to/gps_data")
+
 dplyr::glimpse(gps)
 }
 

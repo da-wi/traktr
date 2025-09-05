@@ -33,7 +33,7 @@ results back to the input tibble.
 \details{
 The function:
 \enumerate{
-\item Collects NDVI chip files either from \code{attr(df,"ndvi_tiles")} or by
+\item Collects NDVI chip files either from \code{attr(df,"ndvi_aoi")} or by
 listing \code{out_dir}.
 \item Builds a lazy mosaic (VRT) using \pkg{terra}.
 \item Reprojects the AOIs to match the raster CRS.

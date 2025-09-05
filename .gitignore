@@ -38,5 +38,4 @@ data/
 ^LICENSE\.md$
 ^\.github$
 ^CRAN-SUBMISSION$
-^png$
 .Rproj.user

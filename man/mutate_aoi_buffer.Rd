@@ -6,8 +6,8 @@
 \usage{
 mutate_aoi_buffer(
   df,
-  lat,
-  lon,
+  lat = "lat",
+  lon = "lon",
   dist = 100,
   .name = "aoi_id",
   crs_planar = 3857

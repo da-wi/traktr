@@ -1,3 +1,189 @@
+#' Fetch NDVI chips for an AOI
+#'
+#' Splits the AOI from `df` (in `attr(df,"ndvi_aoi")`) into request tiles,
+#' downloads Sentinel-2 NDVI chips from the Copernicus Data Space Ecosystem (CDSE),
+#' and stores a tile index as `attr(df,"ndvi_tiles")`. A record of fetch parameters
+#' is stored in `attr(df,"ndvi_fetch_params")`.  
+#' 
+#' This function is AOI-agnostic: it works for H3-derived AOIs
+#' (via [mutate_aoi_h3()]) or buffer-based AOIs (via [mutate_aoi_buffer()]).
+#'
+#' @param df A data frame previously passed through [mutate_aoi_h3()] or
+#'   [mutate_aoi_buffer()], i.e. with an AOI stored in `attr(df,"ndvi_aoi")`.
+#' @param from,to Date range for Sentinel-2 search (inclusive). Must be coercible
+#'   to `Date`.
+#' @param out_dir Directory to which NDVI GeoTIFF chips will be written.
+#' @param res_m Numeric ground resolution in meters per pixel (default `20`).
+#'   This is passed both to tile generation and to CDSE `resolution`.
+#' @param max_px Maximum allowed pixel width/height per request (default `2500`).
+#'   Used when splitting AOIs into tiles.
+#' @param overlap_px Overlap (in pixels) to add around each tile (default `0`).
+#' @param evalscript Path to SentinelHub evalscript file (default
+#'   [ndvi_evalscript_path()]).
+#' @param client OAuth client object for CDSE, e.g. from
+#'   `CDSE::GetOAuthClient(id=..., secret=...)`.
+#' @param rate_n,rate_period Passed to \pkg{ratelimitr} to throttle requests
+#'   (default 2 requests per second).
+#' @param overwrite Logical; if `FALSE` (default), existing `.tif` files in
+#'   `out_dir` are skipped. If `TRUE`, files are re-fetched.
+#'
+#' @details
+#' The function:
+#' \enumerate{
+#'   \item Calls [make_request_tiles()] on the AOI.
+#'   \item Iterates through each tile and calls [cdse_fetch_chip()].
+#'   \item Handles errors gracefully with \pkg{purrr::safely}.
+#'   \item Applies a rate limit to avoid hitting API caps.
+#'   \item Builds an `sf` index of all tiles with columns:
+#'     `tile_id`, `geometry`, `file`, `status`, `msg`.
+#' }
+#'
+#' The tile index is attached as `attr(df,"ndvi_tiles")`.
+#' Parameters used are stored as a list in `attr(df,"ndvi_fetch_params")`.
+#'
+#' Progress is displayed using \pkg{cli}.
+#'
+#' @return The input `df`, with additional attributes:
+#' * `ndvi_tiles` — an `sf` object of tiles with download status and file paths.
+#' * `ndvi_fetch_params` — list of parameters used.
+#'
+#' @examples
+#' \dontrun{
+#' df <- tibble::tibble(lat = c(47.38,47.39), lon = c(8.53,8.54)) |>
+#'   mutate_aoi_h3(lat, lon, res = 10)
+#'
+#' oauth <- CDSE::GetOAuthClient(
+#'   id     = Sys.getenv("CDSE_CLIENT_ID"),
+#'   secret = Sys.getenv("CDSE_CLIENT_SECRET")
+#' )
+#'
+#' df <- fetch_ndvi(df,
+#'                  from = as.Date("2025-04-01"),
+#'                  to   = as.Date("2025-04-30"),
+#'                  out_dir = "output/ndvi",
+#'                  res_m   = 20,
+#'                  client  = oauth)
+#'
+#' attr(df, "ndvi_tiles")
+#' }
+#'
+#' @seealso [mutate_aoi_h3()], [mutate_aoi_buffer()], [attach_ndvi()],
+#' @export
+fetch_ndvi <- function(df, from, to, out_dir,
+                       res_m = 10, max_px = 2500, overlap_px = 0,
+                       evalscript = ndvi_evalscript_path(),
+                       client, rate_n = 2, rate_period = 1,
+                       overwrite = FALSE) {
+  rlang::check_installed(c("cli","ratelimitr","purrr","tibble","dplyr","sf","glue"))
+  
+  aoi <- attr(df, "traktr_aoi")
+  if (is.null(aoi) || !"sf" %in% class(aoi)) {
+    rlang::abort("No AOI found – please call a mutate_aoi_*() function first.")
+  }
+  dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
+  
+  # 1) Tiles erzeugen
+  tiles <- make_request_tiles(aoi, res_m = res_m, max_px = max_px, overlap_px = overlap_px)
+  n_tiles <- nrow(tiles$chips_wgs84)
+  if (!n_tiles) rlang::abort("No tiles to request (AOI too small or filtered).")
+  idx <- seq_len(n_tiles)
+  
+  sanitize <- function(x) gsub("[-.]", "_", format(x, scientific = FALSE))
+  
+  # 2) Safe + Rate-limit
+  safe_one <- purrr::safely(function(i) {
+    bbox <- sf::st_bbox(tiles$chips_wgs84[i, ])
+    
+    filename <- glue::glue(
+      "ndvi_{sanitize(bbox$xmin)}_{sanitize(bbox$ymin)}_{sanitize(bbox$xmax)}_{sanitize(bbox$ymax)}_{as.character(as.Date(from))}_{as.character(as.Date(to))}.tif"
+    )
+    
+    out_file <- file.path(out_dir, filename)
+    
+    #out_file <- file.path(out_dir, sprintf("ndvi_%06d.tif", tiles$chips_wgs84$tile_id[i]))
+    
+    cdse_fetch_chip(tiles$chips_wgs84[i, ], from, to, evalscript, out_file,  resolution = res_m, client = client)
+  })
+  
+  
+  limited <- ratelimitr::limit_rate(safe_one, ratelimitr::rate(n = rate_n, period = rate_period))
+  
+  # 3) Fortschritt
+  skipped <- 0
+  cli::cli_progress_step("Fetching data from CDSE",
+                         msg_done = "Fetching NDVI data completed", spinner = TRUE)
+  
+  pb <- cli::cli_progress_bar(total = n_tiles,
+                              format = "Downloading {cli::pb_bar} {cli::pb_percent} (skipped {skipped})",
+                              clear = FALSE)
+  
+  res_list <- vector("list", n_tiles)
+  for (j in seq_along(idx)) {
+    i <- idx[j]
+    
+    bbox <- sf::st_bbox(tiles$chips_wgs84[i, ])
+    
+    filename <- glue::glue(
+      "ndvi_{sanitize(bbox$xmin)}_{sanitize(bbox$ymin)}_{sanitize(bbox$xmax)}_{sanitize(bbox$ymax)}_{as.character(as.Date(from))}_{as.character(as.Date(to))}.tif"
+    )
+    
+    out_file <- file.path(out_dir, filename)
+    
+    #out_file <- file.path(out_dir, sprintf("ndvi_%06d.tif", tiles$chips_wgs84$tile_id[i]))
+    
+    if (!overwrite && file.exists(out_file)) {
+      skipped <- skipped + 1
+      res_list[[j]] <- tibble::tibble(tile_id = tiles$chips_wgs84$tile_id[i],
+                                      file = out_file, status = "skipped")
+    } else {
+      if (is.null(client )) {
+        cli::cli_abort("No OAuth client set. ")
+      } else {
+        ans <- limited(i)
+      }
+      
+      if (!is.null(ans$error)) {
+        res_list[[j]] <- tibble::tibble(
+          tile_id = tiles$chips_wgs84$tile_id[i],
+          file    = NA_character_,
+          status  = "error",
+          msg     = paste(ans$error)
+        )
+      } else {
+        res_list[[j]] <- ans$result
+      }
+    }
+    cli::cli_progress_update(id = pb)
+  }
+  cli::cli_progress_done(id = pb)
+  
+  results <- dplyr::bind_rows(res_list)
+  
+  # Falls cdse_fetch_chip() 'id' statt 'tile_id' liefert → umbenennen
+  if ("id" %in% names(results) && !"tile_id" %in% names(results)) {
+    results <- dplyr::rename(results, tile_id = id)
+  }
+  
+  # 4) Tile-Index (sf) zusammenbauen und anhängen
+  tile_index <- dplyr::left_join(
+    tiles$chips_wgs84 |> dplyr::select(tile_id, geometry),
+    results |> dplyr::select(dplyr::any_of(c("tile_id","file","status","msg"))),
+    by = "tile_id"
+  )
+  tile_index <- sf::st_as_sf(tile_index)
+  attr(df, "ndvi_aoi") <- tile_index
+  attr(df, "ndvi_fetch_params") <- list(
+    from = as.Date(from), to = as.Date(to),
+    out_dir = out_dir, res_m = res_m, max_px = max_px, overlap_px = overlap_px,
+    evalscript = evalscript, rate_n = rate_n, rate_period = rate_period,
+    overwrite = overwrite
+  )
+  class(df) <- union("traktr_df", class(df))
+  invisible(df)
+}
+
+
+
 #' Split an AOI into request tiles under a pixel-size limit
 #'
 #' Splits an \pkg{sf}/\pkg{sfc} AOI into square tiles in a metric CRS so that the
@@ -144,191 +330,6 @@ ndvi_evalscript_path <- function() {
   return("inst/ext/ndvi_default_2band.js")
 }
 
-
-#' Fetch NDVI chips for an AOI
-#'
-#' Splits the AOI from `df` (in `attr(df,"ndvi_aoi")`) into request tiles,
-#' downloads Sentinel-2 NDVI chips from the Copernicus Data Space Ecosystem (CDSE),
-#' and stores a tile index as `attr(df,"ndvi_tiles")`. A record of fetch parameters
-#' is stored in `attr(df,"ndvi_fetch_params")`.  
-#' 
-#' This function is AOI-agnostic: it works for H3-derived AOIs
-#' (via [mutate_aoi_h3()]) or buffer-based AOIs (via [mutate_aoi_buffer()]).
-#'
-#' @param df A data frame previously passed through [mutate_aoi_h3()] or
-#'   [mutate_aoi_buffer()], i.e. with an AOI stored in `attr(df,"ndvi_aoi")`.
-#' @param from,to Date range for Sentinel-2 search (inclusive). Must be coercible
-#'   to `Date`.
-#' @param out_dir Directory to which NDVI GeoTIFF chips will be written.
-#' @param res_m Numeric ground resolution in meters per pixel (default `20`).
-#'   This is passed both to tile generation and to CDSE `resolution`.
-#' @param max_px Maximum allowed pixel width/height per request (default `2500`).
-#'   Used when splitting AOIs into tiles.
-#' @param overlap_px Overlap (in pixels) to add around each tile (default `0`).
-#' @param evalscript Path to SentinelHub evalscript file (default
-#'   [ndvi_evalscript_path()]).
-#' @param client OAuth client object for CDSE, e.g. from
-#'   `CDSE::GetOAuthClient(id=..., secret=...)`.
-#' @param rate_n,rate_period Passed to \pkg{ratelimitr} to throttle requests
-#'   (default 2 requests per second).
-#' @param overwrite Logical; if `FALSE` (default), existing `.tif` files in
-#'   `out_dir` are skipped. If `TRUE`, files are re-fetched.
-#'
-#' @details
-#' The function:
-#' \enumerate{
-#'   \item Calls [make_request_tiles()] on the AOI.
-#'   \item Iterates through each tile and calls [cdse_fetch_chip()].
-#'   \item Handles errors gracefully with \pkg{purrr::safely}.
-#'   \item Applies a rate limit to avoid hitting API caps.
-#'   \item Builds an `sf` index of all tiles with columns:
-#'     `tile_id`, `geometry`, `file`, `status`, `msg`.
-#' }
-#'
-#' The tile index is attached as `attr(df,"ndvi_tiles")`.
-#' Parameters used are stored as a list in `attr(df,"ndvi_fetch_params")`.
-#'
-#' Progress is displayed using \pkg{cli}.
-#'
-#' @return The input `df`, with additional attributes:
-#' * `ndvi_tiles` — an `sf` object of tiles with download status and file paths.
-#' * `ndvi_fetch_params` — list of parameters used.
-#'
-#' @examples
-#' \dontrun{
-#' df <- tibble::tibble(lat = c(47.38,47.39), lon = c(8.53,8.54)) |>
-#'   mutate_aoi_h3(lat, lon, res = 10)
-#'
-#' oauth <- CDSE::GetOAuthClient(
-#'   id     = Sys.getenv("CDSE_CLIENT_ID"),
-#'   secret = Sys.getenv("CDSE_CLIENT_SECRET")
-#' )
-#'
-#' df <- fetch_ndvi(df,
-#'                  from = as.Date("2025-04-01"),
-#'                  to   = as.Date("2025-04-30"),
-#'                  out_dir = "output/ndvi",
-#'                  res_m   = 20,
-#'                  client  = oauth)
-#'
-#' attr(df, "ndvi_tiles")
-#' }
-#'
-#' @seealso [mutate_aoi_h3()], [mutate_aoi_buffer()], [attach_ndvi()],
-#'   [make_request_tiles()], [cdse_fetch_chip()]
-#' @export
-fetch_ndvi <- function(df, from, to, out_dir,
-                       res_m = 20, max_px = 2500, overlap_px = 0,
-                       evalscript = ndvi_evalscript_path(),
-                       client, rate_n = 2, rate_period = 1,
-                       overwrite = FALSE) {
-  rlang::check_installed(c("cli","ratelimitr","purrr","tibble","dplyr","sf","glue"))
-  
-  aoi <- attr(df, "traktr_aoi")
-  if (is.null(aoi) || !"sf" %in% class(aoi)) {
-    rlang::abort("No AOI found – please call a mutate_aoi_*() function first.")
-  }
-  dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
-  
-  # 1) Tiles erzeugen
-  tiles <- make_request_tiles(aoi, res_m = res_m, max_px = max_px, overlap_px = overlap_px)
-  n_tiles <- nrow(tiles$chips_wgs84)
-  if (!n_tiles) rlang::abort("No tiles to request (AOI too small or filtered).")
-  idx <- seq_len(n_tiles)
-  
-  sanitize <- function(x) gsub("[-.]", "_", format(x, scientific = FALSE))
-  
-  # 2) Safe + Rate-limit
-  safe_one <- purrr::safely(function(i) {
-    bbox <- sf::st_bbox(tiles$chips_wgs84[i, ])
-    
-    filename <- glue::glue(
-      "ndvi_{sanitize(bbox$xmin)}_{sanitize(bbox$ymin)}_{sanitize(bbox$xmax)}_{sanitize(bbox$ymax)}_{as.character(as.Date(from))}_{as.character(as.Date(to))}.tif"
-    )
-    
-    out_file <- file.path(out_dir, filename)
-    
-    #out_file <- file.path(out_dir, sprintf("ndvi_%06d.tif", tiles$chips_wgs84$tile_id[i]))
-    
-    cdse_fetch_chip(tiles$chips_wgs84[i, ], from, to, evalscript, out_file,  resolution = res_m, client = client)
-  })
-  
-  
-  limited <- ratelimitr::limit_rate(safe_one, ratelimitr::rate(n = rate_n, period = rate_period))
-  
-  # 3) Fortschritt
-  skipped <- 0
-  cli::cli_progress_step("Fetching data from CDSE",
-                         msg_done = "Fetching NDVI data completed", spinner = TRUE)
-  
-  pb <- cli::cli_progress_bar(total = n_tiles,
-                              format = "Downloading {cli::pb_bar} {cli::pb_percent} (skipped {skipped})",
-                              clear = FALSE)
-  
-  res_list <- vector("list", n_tiles)
-  for (j in seq_along(idx)) {
-    i <- idx[j]
-    
-    bbox <- sf::st_bbox(tiles$chips_wgs84[i, ])
-    
-    filename <- glue::glue(
-      "ndvi_{sanitize(bbox$xmin)}_{sanitize(bbox$ymin)}_{sanitize(bbox$xmax)}_{sanitize(bbox$ymax)}_{as.character(as.Date(from))}_{as.character(as.Date(to))}.tif"
-    )
-    
-    out_file <- file.path(out_dir, filename)
-    
-    #out_file <- file.path(out_dir, sprintf("ndvi_%06d.tif", tiles$chips_wgs84$tile_id[i]))
-    
-    if (!overwrite && file.exists(out_file)) {
-      skipped <- skipped + 1
-      res_list[[j]] <- tibble::tibble(tile_id = tiles$chips_wgs84$tile_id[i],
-                            file = out_file, status = "skipped")
-    } else {
-        if (is.null(client )) {
-          cli::cli_abort("No OAuth client set. ")
-        } else {
-          ans <- limited(i)
-        }
-        
-        if (!is.null(ans$error)) {
-          res_list[[j]] <- tibble::tibble(
-            tile_id = tiles$chips_wgs84$tile_id[i],
-            file    = NA_character_,
-            status  = "error",
-            msg     = paste(ans$error)
-          )
-        } else {
-          res_list[[j]] <- ans$result
-        }
-    }
-    cli::cli_progress_update(id = pb)
-  }
-  cli::cli_progress_done(id = pb)
-  
-  results <- dplyr::bind_rows(res_list)
-  
-  # Falls cdse_fetch_chip() 'id' statt 'tile_id' liefert → umbenennen
-  if ("id" %in% names(results) && !"tile_id" %in% names(results)) {
-    results <- dplyr::rename(results, tile_id = id)
-  }
-  
-  # 4) Tile-Index (sf) zusammenbauen und anhängen
-  tile_index <- dplyr::left_join(
-    tiles$chips_wgs84 |> dplyr::select(tile_id, geometry),
-    results |> dplyr::select(dplyr::any_of(c("tile_id","file","status","msg"))),
-    by = "tile_id"
-  )
-  tile_index <- sf::st_as_sf(tile_index)
-  attr(df, "ndvi_aoi") <- tile_index
-  attr(df, "ndvi_fetch_params") <- list(
-    from = as.Date(from), to = as.Date(to),
-    out_dir = out_dir, res_m = res_m, max_px = max_px, overlap_px = overlap_px,
-    evalscript = evalscript, rate_n = rate_n, rate_period = rate_period,
-    overwrite = overwrite
-  )
-  class(df) <- union("traktr_df", class(df))
-  invisible(df)
-}
 
 
 #' Fetch a single chip from CDSE and write to disk

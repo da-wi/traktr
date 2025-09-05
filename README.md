@@ -1,6 +1,4 @@
-<!-- README.md is generated from README.Rmd. Please edit that file -->
-
-# traktr
+# traktr <a href='https://da-wi.github.io/traktr/'><img src="man/figures/logo.png" align="right" height="139" /></a>
 
 [![R-CMD-check](https://github.com/da-wi/traktr/actions/workflows/R-CMD-check.yml/badge.svg)](https://github.com/da-wi/traktr/actions/workflows/R-CMD-check.yml)
 
