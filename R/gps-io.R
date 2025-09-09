@@ -36,7 +36,7 @@
 #'
 #' @export
 read_gps_csv <- function(pattern, dir = NULL) {
-  rlang::check_installed(c("readr","dplyr","purrr","stringr"))
+  rlang::check_installed(c("readr", "dplyr", "stringr", "cli", "tibble"))
   
   root_env <- Sys.getenv("GPS_SMB_ROOT", "")
   src_dir <- if (!is.null(dir)) {
@@ -51,8 +51,12 @@ read_gps_csv <- function(pattern, dir = NULL) {
   
   # All matching files
   files <- list.files(src_dir, pattern = pattern, full.names = TRUE)
+  if (length(files) == 0L) {
+    cli::cli_abort("No files matching '{pattern}' found in '{src_dir}'.")
+  }
   
   cli::cli_alert_info("Data directory: {src_dir}")
+  
   pb <- cli::cli_progress_bar(
     format = paste0(
       "{cli::pb_spin} Reading {basename(files[i])} ",
@@ -66,28 +70,46 @@ read_gps_csv <- function(pattern, dir = NULL) {
   on.exit(cli::cli_progress_done(id = pb), add = TRUE)
   
   result <- tibble::tibble()
-  for (i in 1:length(files)) {
+  
+  for (i in seq_along(files)) {
+    #cli::cli_progress_update(id = pb, status = paste0("Reading ", basename(files[i])))
+    
     subj <- stringr::str_extract(basename(files[i]), "^[A-Za-z]\\d{3}")
-    if (is.na(subj)) cli::cli_warn("Couldn't extract subject ID from: {basename(files[i])}")
+    if (is.na(subj)) {
+      cli::cli_warn("Couldn't extract subject ID from: {basename(files[i])}")
+    }
     
-    res <- readr::read_csv(files[i], show_col_types = FALSE, progress = F) |>
-      dplyr::mutate(subject = subj) |>
-      relocate(subject, .before = id) 
+    res <- readr::read_csv(files[i], show_col_types = FALSE, progress = FALSE) |>
+      dplyr::mutate(subject = subj)
     
+    # Required columns check (adjust to your schema as needed)
     required_cols <- c("timestamp", "lat")
     if (!all(required_cols %in% names(res))) {
       cli::cli_warn("Skipping file with missing required columns: {basename(files[i])}")
+      cli::cli_progress_update(id = pb, inc = 1)
       next
     }
     
+    # Normalize lng -> lon if needed
     if ("lng" %in% names(res) && !"lon" %in% names(res)) {
-      res <- dplyr::rename(res, lon = lng)
+      res$lon <- res$lng
+      res <- res[ , !(names(res) %in% "lng")]
     }
     
-    result <- result |> dplyr::bind_rows(res)
+    # Move 'subject' before 'id' without bare symbols
+    if ("id" %in% names(res)) {
+      res <- dplyr::relocate(res, dplyr::all_of("subject"),
+                             .before = dplyr::all_of("id"))
+    } else {
+      res <- dplyr::relocate(res, dplyr::all_of("subject"))
+    }
+    
+    result <- dplyr::bind_rows(result, res)
     cli::cli_progress_update(id = pb, inc = 1)
     
   }
   
   result
 }
+
+

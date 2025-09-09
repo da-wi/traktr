@@ -56,7 +56,7 @@ attach_ndvi <- function(df, out_dir, summary = "mean", drop_geometry = FALSE) {
                          spinner = TRUE)
   aoi <- attr(df, "traktr_aoi")
   if (is.null(aoi) || !"sf" %in% class(aoi)) {
-    rlang::abort("No AOI found – call a mutate_aoi_*() function first.")
+    rlang::abort("No AOI found: call a mutate_aoi_*() function first.")
   }
   params <- attr(df, "traktr_aoi_params")
   id_col <- if (!is.null(params) && !is.null(params$id_col)) params$id_col else {
@@ -77,12 +77,13 @@ attach_ndvi <- function(df, out_dir, summary = "mean", drop_geometry = FALSE) {
     files <- list.files(out_dir, "\\.tif$", full.names = TRUE)
     if (!length(files)) rlang::abort("No NDVI files found (empty out_dir).")
   } else {
-    files <- dplyr::filter(tiles, !is.na(.data$file))$file
+    files <- dplyr::filter(tiles, !is.na(tiles$file))$file
     if (!length(files)) rlang::abort("No NDVI files recorded in attr(df,'ndvi_aoi').")
   }
   
   if ("geometry" %in% names(df)) {
-    df <- dplyr::select(df, -geometry)
+    #df <- subset(df, select = -geometry)
+    df <- df[ , !(names(df) %in% "geometry")]
   }
   
   # create virtual raster from files
@@ -92,13 +93,24 @@ attach_ndvi <- function(df, out_dir, summary = "mean", drop_geometry = FALSE) {
   # special case h3 
   if (params$id_col == "h3") {
     # extract for each distinct h3
-    aoi_r <- aoi_r |>
-      dplyr::distinct(h3, .keep_all = T)
+    # keep first occurrence of each h3 (preserves all columns, including geometry)
+    aoi_r <- aoi_r[!duplicated(aoi_r$h3), , drop = FALSE]
   }
   
-  aoi_r <- aoi_r |>
-    mutate(!!rlang::sym(glue::glue("ndvi_{summary}")) := 
-             exactextractr::exact_extract(virtual_raster, aoi_r, summary, progress = F)[,1])
+  #aoi_r <- aoi_r |>
+  #  mutate(!!rlang::sym(glue::glue("ndvi_{summary}")) := exactextractr::exact_extract(virtual_raster, aoi_r, summary, progress = F)[,1])
+  #new_col <- glue::glue("ndvi_{summary}")
+  new_col <- sprintf("ndvi_%s", summary)
+  
+  vals <- exactextractr::exact_extract(virtual_raster, aoi_r, summary, progress = FALSE)[, 1]
+  
+  if (length(vals) != nrow(aoi_r)) {
+    cli::cli_abort("Length mismatch: exact_extract returned ", length(vals),
+         " rows but aoi_r has ", nrow(aoi_r))
+  }
+  
+  # assign (works for sf objects too)
+  aoi_r[[new_col]] <- vals
   
   # then join back
   df <- df |> sf::st_drop_geometry() |> dplyr::inner_join(aoi_r, by = id_col)
@@ -109,6 +121,6 @@ attach_ndvi <- function(df, out_dir, summary = "mean", drop_geometry = FALSE) {
   if (drop_geometry == TRUE) {
     df |> sf::st_drop_geometry()
   } else {
-    df |> dplyr::relocate(geometry, .after = dplyr::last_col()) |> sf::st_as_sf()
+    df |> dplyr::relocate(dplyr::all_of("geometry"), .after = dplyr::last_col()) |> sf::st_as_sf()
   }
 }

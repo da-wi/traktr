@@ -20,13 +20,23 @@ knitr::opts_chunk$set(
 )
 ```
 
-In this vignette, you will learn see a basic workflow with the package for one individual. 
+The `traktr` package helps you combine GPS tracking data with satellite-based environmental data from the Copernicus Data Space Ecosystem (CDSE).
 
-### Setup OAuth for Sentinel-2
+In this vignette, we'll walk through a simple workflow for one participant (Z313). You will learn how to:
 
-After installing, you should create an account on https://shapps.dataspace.copernicus.eu/dashboard/#/account/settings and create an OAuth Client there. 
+1. Authenticate with CDSE
+2. Import GPS logs
+3. Fetch NDVI (vegetation index) and land-use data
+4. Visualize the results
 
-If you did this, set up your `.Renviron` file, that includes the environmental variables for CDSE and the GPS data directory. 
+We'll start with a small example dataset so you can run everything out of the box. Then, we'll show how to connect to real CDSE data.
+
+
+### Step 1. Authenticate with CDSE
+
+To access Sentinel-2 satellite data, you need a CDSE account. Create one [here](https://shapps.dataspace.copernicus.eu/dashboard/#/account/settings) 
+
+Then create an OAuth Client in your account. Store the credentials in your .Renviron file:
 
 ```{r eval=FALSE}
 CDSE_CLIENT_ID=myid
@@ -34,7 +44,7 @@ CDSE_CLIENT_SECRET=mysecret
 GPS_SMB_ROOT="//myserver/GPS"
 ```
 
-After adapting the files, read in the environment variables by calling
+Reload them into R:
 
 ```{r eval=FALSE}
 readRenviron(".Renviron")
@@ -43,14 +53,86 @@ readRenviron(".Renviron")
 Sys.getenv("CDSE_CLIENT_ID", "")
 ```
 
-To fetch satellite imagery from CDSE, we need to create an OAuthClient with the credentials from our account. 
-These are the credentials you have to put in `.Renviron`.
+With this, create an OAuth client:
 
 ```{r eval=FALSE}
 oauth <- CDSE::GetOAuthClient(id = Sys.getenv("CDSE_CLIENT_ID", ""),
                               secret = Sys.getenv("CDSE_CLIENT_SECRET", ""))
 
 ```
+
+
+### Step 2. Load GPS data
+
+`traktr` can read GPS logs directly from `.csv` files in your `GPS_SMB_ROOT` directory.
+
+Example with real data:
+
+```{r eval=FALSE}
+gps_data <- read_gps_csv(pattern = "^Z.*\\.csv$") |> 
+  dplyr::select(subject, timestamp, lat, lon, direction, speed)
+```
+
+### Step 3. Fetch NDVI and land-use data
+
+Next, we enrich the GPS data with **NDVI** (Normalized Difference Vegetation Index) and **land-use categories** from Sentinel-2.
+
+Filter to participant `Z313`:
+
+```{r eval=FALSE}
+gps_data_Z313 <- gps_data |> 
+  filter(subject=="Z313")
+```
+
+Fetch satellite data (requires CDSE OAuth client):
+
+
+```{r eval=FALSE}
+gps_data_Z313 <- gps_data |> 
+  filter(subject=="Z313")
+
+gps_data_Z313 <- gps_data_Z313 |>
+  mutate_aoi_h3(lat = "lat", lon = "lon") |>
+  fetch_ndvi(
+    from = min(gps_data_Z313$timestamp),
+    to   = max(gps_data_Z313$timestamp),
+    out_dir = "output/.ndvi",
+    client = oauth,
+    res_m = 10
+  ) |>
+  attach_ndvi() |>
+  fetch_landuse(out_dir = "output/.landuse") |>
+  attach_landuse()
+```
+
+💡 NDVI values range from 0 (bare ground) to 1 (lush green vegetation).
+
+### Step 4. Visualize results
+
+#### Simple NDVI map
+
+```{r eval=FALSE}
+library(ggplot2)
+
+ggplot(gps_data_Z313 |> select(h3, ndvi_mean, geometry) |> unique(),
+       aes(fill = ndvi_mean)) +
+  geom_sf(color = NA) +
+  scale_fill_gradient2(
+    midpoint = 0.5,
+    low = "brown",
+    mid = "#E7D6A4",
+    high = "darkgreen",
+    limits = c(0,1)
+  )+
+  labs(fill = "NDVI")+
+  # remove coordinates for pricavy
+  theme_void()
+```
+
+
+#### Adding OpenStreetMap context
+
+With `cartographr`, you can overlay NDVI values on top of OSM basemaps:
 
 ### Read GPS data files
 
@@ -105,51 +187,50 @@ ggplot(gps_data_Z313 |> select(h3, ndvi_mean, geometry) |> unique(),
 ```
 
 
-### Visualization with `cartographr`
+#### Visualization with `cartographr`
 
 ```{r eval=FALSE}
-library(ggplot2)
 library(cartographr)
 
-osm <- get_osmdata(bbox = attr(gps_data_Z313, "traktr_aoi")  |> sf::st_bbox())
-set_attribution(F)
+osm <- get_osmdata(
+  bbox = attr(gps_data_Z313, "traktr_aoi") |> sf::st_bbox()
+)
+
+set_attribution(FALSE)
 set_output_size(size = "A3", orientation = "landscape")
 
-{
-  p <- osm |> plot_map("swiss") 
-  pm <- p +
-    ggnewscale::new_scale_fill()+
-    geom_sf(data= gps_data_Z313 |>
-              select(geometry, ndvi_mean, frac_green_core, h3) |> 
-              unique(),
-            aes(fill = ndvi_mean), 
-            color = NA, alpha = 0.6)+
-    scale_fill_gradient2(
-      low = "brown",midpoint = 0.5,
-      mid = "#E7D6A4",
-      high = "darkgreen",
-      name = "values",
-      limits = c(0,1),
-      breaks = c(0,0.5,1)
-    )+
-    cartographr:::adjust_viewport(p)+
-    cartographr::theme_infomap()
-}
+p <- osm |> plot_map("swiss")
+
+pm <- p +
+  ggnewscale::new_scale_fill() +
+  geom_sf(
+    data = gps_data_Z313 |> 
+      dplyr::select(geometry, ndvi_mean, frac_green_core, h3) |> 
+      unique(),
+    aes(fill = ndvi_mean),
+    color = NA, alpha = 0.6
+  ) +
+  scale_fill_gradient2(
+    low = "brown", midpoint = 0.5,
+    mid = "#E7D6A4", high = "darkgreen",
+    name = "NDVI",
+    limits = c(0, 1), breaks = c(0, 0.5, 1)
+  ) +
+  cartographr:::adjust_viewport(p) +
+  cartographr::theme_infomap()
 
 save_map(pm, filename = "output/Z313_ndvi.pdf")
-
-ggplot(gps_data_Z313 |> select(h3, ndvi_mean, geometry) |> unique(),
-       aes(fill = ndvi_mean)) +
-  geom_sf(color = NA) +
-  scale_fill_gradient2(
-    midpoint = 0.5,
-    low = "brown",
-    mid = "#E7D6A4",
-    high = "darkgreen",
-    limits = c(0,1)
-  )+
-  labs(fill = "NDVI")+
-  # remove coordinates for pricavy
-  theme_void()
 ```
 
+### Summary and next steps
+
+In this vignette, you learned how to:
+
+1. Authenticate with CDSE
+2. Load GPS logs
+3. Fetch NDVI and land-use data
+4. Create visualizations with `ggplot2` and `cartographr`
+
+Next, you may want to explore:
+
+📊 Summarizing NDVI time series across participants

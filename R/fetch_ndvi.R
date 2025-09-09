@@ -18,8 +18,7 @@
 #' @param max_px Maximum allowed pixel width/height per request (default `2500`).
 #'   Used when splitting AOIs into tiles.
 #' @param overlap_px Overlap (in pixels) to add around each tile (default `0`).
-#' @param evalscript Path to SentinelHub evalscript file (default
-#'   [ndvi_evalscript_path()]).
+#' @param evalscript Path to SentinelHub evalscript file.
 #' @param client OAuth client object for CDSE, e.g. from
 #'   `CDSE::GetOAuthClient(id=..., secret=...)`.
 #' @param rate_n,rate_period Passed to \pkg{ratelimitr} to throttle requests
@@ -30,9 +29,8 @@
 #' @details
 #' The function:
 #' \enumerate{
-#'   \item Calls [make_request_tiles()] on the AOI.
-#'   \item Iterates through each tile and calls [cdse_fetch_chip()].
-#'   \item Handles errors gracefully with \pkg{purrr::safely}.
+#'   \item Creates request tiles on the AOI.
+#'   \item Iterates through each tile and fetches the satellite data.
 #'   \item Applies a rate limit to avoid hitting API caps.
 #'   \item Builds an `sf` index of all tiles with columns:
 #'     `tile_id`, `geometry`, `file`, `status`, `msg`.
@@ -44,8 +42,8 @@
 #' Progress is displayed using \pkg{cli}.
 #'
 #' @return The input `df`, with additional attributes:
-#' * `ndvi_tiles` — an `sf` object of tiles with download status and file paths.
-#' * `ndvi_fetch_params` — list of parameters used.
+#' * `ndvi_tiles` - an `sf` object of tiles with download status and file paths.
+#' * `ndvi_fetch_params` - list of parameters used.
 #'
 #' @examples
 #' \dontrun{
@@ -78,7 +76,7 @@ fetch_ndvi <- function(df, from, to, out_dir,
   
   aoi <- attr(df, "traktr_aoi")
   if (is.null(aoi) || !"sf" %in% class(aoi)) {
-    rlang::abort("No AOI found – please call a mutate_aoi_*() function first.")
+    rlang::abort("No AOI found: please call a mutate_aoi_*() function first.")
   }
   dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
   
@@ -159,14 +157,16 @@ fetch_ndvi <- function(df, from, to, out_dir,
   
   results <- dplyr::bind_rows(res_list)
   
-  # Falls cdse_fetch_chip() 'id' statt 'tile_id' liefert → umbenennen
   if ("id" %in% names(results) && !"tile_id" %in% names(results)) {
-    results <- dplyr::rename(results, tile_id = id)
+    #results <- dplyr::rename(results, tile_id = id)
+    results$tile_id <- results$id
+    #results <- subset(results, select = -id)
+    results <- results[ , !(names(results) %in% "id")]
+    
   }
   
-  # 4) Tile-Index (sf) zusammenbauen und anhängen
   tile_index <- dplyr::left_join(
-    tiles$chips_wgs84 |> dplyr::select(tile_id, geometry),
+    tiles$chips_wgs84 |> dplyr::select(dplyr::any_of(c("tile_id", "geometry"))),
     results |> dplyr::select(dplyr::any_of(c("tile_id","file","status","msg"))),
     by = "tile_id"
   )
@@ -249,11 +249,11 @@ make_request_tiles <- function(aoi, res_m = 20, max_px = 2500,
     sf::st_make_valid() |>
     sf::st_transform(crs_metric)
   
-  # Ziel-Kantenlänge je Kachel (Meter)
+  # Ziel-Kantenlaenge je Kachel (Meter)
   tile_size_m <- (max_px - 2*overlap_px) * res_m
   ov_m <- overlap_px * res_m
   
-  # Grid nur über die AOI-BBox
+  # Grid nur ueber die AOI-BBox
   grid <- sf::st_make_grid(aoi_m,
                        cellsize = c(tile_size_m, tile_size_m),
                        what = "polygons", square = TRUE)
@@ -276,47 +276,78 @@ make_request_tiles <- function(aoi, res_m = 20, max_px = 2500,
   
   suppressWarnings({
     aoi_union <- sf::st_union(sf::st_geometry(aoi_m))
-    # auf AOI clippen => "leere" Bereiche entfallen
+    # auf AOI clippen -> "leere" Bereiche entfallen
     chips_m <- sf::st_intersection(st_as_sf(grid_sel_buf), aoi_union) |>
       sf::st_make_valid() |>
-      mutate(tile_id = grid_sel$tile_id)
+      dplyr::mutate(tile_id = grid_sel$tile_id)
   })
   
   # Tiny slivers entfernen
-  chips_m <- suppressWarnings(
-    chips_m |>
-      dplyr::mutate(area_m2 = as.numeric(sf::st_area(sf::st_geometry(chips_m)))) |>
-      dplyr::filter(area_m2 >= min_area_m2) |>
-      sf::st_as_sf()
-  )
+  #chips_m <- suppressWarnings(
+  #  chips_m |>
+  #    dplyr::mutate(area_m2 = as.numeric(sf::st_area(sf::st_geometry(chips_m)))) |>
+  #    dplyr::filter(dplyr::all_of("area_m2") >= min_area_m2) |>
+  #    sf::st_as_sf()
+  #)
+  suppressWarnings(
+    {
+    chips_m$area_m2 <- as.numeric(sf::st_area(sf::st_geometry(chips_m)))
+    
+    # subset rows safely — preserves sf class
+    keep <- !is.na(chips_m$area_m2) & (chips_m$area_m2 >= min_area_m2)
+    chips_m <- chips_m[keep, , drop = FALSE]
+    chips_m <- sf::st_as_sf(chips_m)
+    }
+  )  
   
-  # BBox-Dimensionen (Meter) & erwartete Pixelmaße je Chip
+  
+  # BBox-Dimensionen (Meter) & erwartete Pixelmasse je Chip
+  # chips_m <- chips_m |>
+  #   dplyr::rowwise() |>
+  #   dplyr::mutate(
+  #     bb = list(sf::st_bbox(sf::st_geometry(chips_m))),
+  #     width_m  = bb$xmax - bb$xmin,
+  #     height_m = bb$ymax - bb$ymin,
+  #     width_px  = ceiling(width_m  / res_m),
+  #     height_px = ceiling(height_m / res_m)
+  #   ) |>
+  #   # rename(geometry = x) |>
+  #   dplyr::ungroup() |>
+  #   dplyr::select(dplyr::all_of(c("tile_id", "area_m2", "width_m", "height_m", "width_px", "height_px", "geometry")))
+  # 
+  # compute as above
+  geoms <- sf::st_geometry(chips_m)
+  bboxes <- lapply(geoms, sf::st_bbox)
+  width_m  <- vapply(bboxes, function(bb) as.numeric(bb["xmax"] - bb["xmin"]), numeric(1))
+  height_m <- vapply(bboxes, function(bb) as.numeric(bb["ymax"] - bb["ymin"]), numeric(1))
+  width_px  <- ceiling(width_m / res_m)
+  height_px <- ceiling(height_m / res_m)
+  
   chips_m <- chips_m |>
-    rowwise() |>
-    mutate(
-      bb = list(sf::st_bbox(sf::st_geometry(chips_m))),
-      width_m  = bb$xmax - bb$xmin,
-      height_m = bb$ymax - bb$ymin,
-      width_px  = ceiling(width_m  / res_m),
-      height_px = ceiling(height_m / res_m)
+    dplyr::mutate(
+      width_m  = width_m,
+      height_m = height_m,
+      width_px  = width_px,
+      height_px = height_px,
+      bb = bboxes
     ) |>
-    # rename(geometry = x) |>
-    ungroup() |>
-    select(tile_id, area_m2, width_m, height_m, width_px, height_px, geometry)
+    dplyr::select(dplyr::all_of(c("tile_id", "area_m2", "width_m", "height_m", "width_px", "height_px", attr(chips_m, "sf_column"))))
   
-  # Hinweis, falls etwas noch zu groß ist
+  
+  
+  # Hinweis, falls etwas noch zu gross ist
   if (any(chips_m$width_px > max_px | chips_m$height_px > max_px)) {
-    cli::cli_alert_warning("Some chips exceed max_px – reduce tile_size_m (e.g. increase overlap_px or reduce max_px) and call `make_request_tiles` again.")
+    cli::cli_alert_warning("Some chips exceed max_px - reduce tile_size_m (e.g. increase overlap_px or reduce max_px) and call `make_request_tiles` again.")
   }
   
-  # Für die Anfrage ggf. wieder nach 4326 oder direkt im metrischen CRS lassen,
+  # Fuer die Anfrage ggf. wieder nach 4326 oder direkt im metrischen CRS lassen,
   # je nachdem ob dein Client resx/resy in m (metrisches CRS) oder Grad (4326) erwartet.
-  chips_4326 <- st_transform(chips_m, 4326)
+  chips_4326 <- sf::st_transform(chips_m, 4326)
   
   cli::cli_progress_done()
   
   list(
-    chips_metric = chips_m,   # EPSG:3857 (Pixelmaße stimmen zu res_m in m)
+    chips_metric = chips_m,   # EPSG:3857 (Pixelmasse stimmen zu res_m in m)
     chips_wgs84  = chips_4326 # EPSG:4326 (falls dein Client 4326-Geometrie braucht)
   )
 }
@@ -375,7 +406,7 @@ cdse_fetch_chip <- function(aoi_wgs84,
     client           = client
   )
   
-  print(out_file)
+  #print(out_file)
   # write result
   if (is.raw(res)) {
     writeBin(res, out_file)

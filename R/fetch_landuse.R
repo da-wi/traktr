@@ -2,7 +2,7 @@
 #'
 #' Downloads 10-meter land-cover classification tiles from the
 #' [ESA WorldCover](https://esa-worldcover.org) AWS Open Data repository
-#' for a given AOI. The AOI is split into 3°x3° grid tiles, and matching
+#' for a given AOI. The AOI is split into 3 deg x 3 deg grid tiles, and matching
 #' WorldCover TIFFs are downloaded to a local directory.
 #'
 #' @param df An `sf` polygon or multipolygon representing the AOI. Must have a valid CRS.
@@ -28,7 +28,7 @@
 #' attr(result, "worldcover_tiles")
 #' }
 #'
-#' @seealso [https://esa-worldcover.org], [curl::curl_download()]
+#' @seealso \href{https://esa-worldcover.org}{ESA WorldCover}, [curl::curl_download()]
 #' @export
 fetch_landuse <- function(
     df,
@@ -47,12 +47,12 @@ fetch_landuse <- function(
   if (is.na(sf::st_crs(aoi))) cli::cli_abort("`aoi` has no CRS; assign one first.")
   dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
   
-  # Always work in EPSG:4326 for the 3° tiling
+  # Always work in EPSG:4326 for the 3 deg. tiling
   aoi_ll <- sf::st_make_valid(sf::st_transform(aoi, 4326))
   # If your AOI could cross the dateline, consider:
   # aoi_ll <- st_wrap_dateline(aoi_ll, options = c("WRAPDATELINE=YES", "DATELINEOFFSET=180"))
   
-  # Build a 3° grid aligned to multiples of 3° that covers the AOI bbox
+  # Build a 3 deg. grid aligned to multiples of 3 deg. that covers the AOI bbox
   bb  <- sf::st_bbox(aoi_ll)
   llx <- as.numeric(floor(bb["xmin"]/3) * 3)
   lly <- as.numeric(floor(bb["ymin"]/3) * 3)
@@ -92,38 +92,128 @@ fetch_landuse <- function(
   dests <- file.path(out_dir, basename(urls))
   
   # Optional HEAD check (skip obviously missing URLs)
+  #good <- rep(TRUE, length(urls))
+  #if (check_exists_remote) {
+  #  cli::cli_alert_info("Checking remote availability with HEAD requests ...")
+  #  good <- map_lgl(urls, function(u){
+  #    h <- new_handle(nobody = TRUE)
+  #    res <- tryCatch(curl_fetch_memory(u, handle = h), error = function(e) NULL)
+  #    !is.null(res) && identical(res$status_code, 200L)
+  #  })
+  #  }
+  
+  rlang::check_installed("curl")
   good <- rep(TRUE, length(urls))
   if (check_exists_remote) {
     cli::cli_alert_info("Checking remote availability with HEAD requests ...")
-    good <- map_lgl(urls, function(u){
-      h <- new_handle(nobody = TRUE)
-      res <- tryCatch(curl_fetch_memory(u, handle = h), error = function(e) NULL)
-      !is.null(res) && identical(res$status_code, 200L)
-    })
+    
+    for (i in seq_along(urls)) {
+      u <- urls[i]
+      h <- curl::new_handle(nobody = TRUE, timeout = 10)
+      # optional: curl::handle_setheaders(h, "User-Agent" = "yourpkg/1.0")
+      res <- tryCatch(
+        curl::curl_fetch_memory(u, handle = h),
+        error = function(e) NULL
+      )
+      good[i] <- !is.null(res) && identical(res$status_code, 200L)
+      
+      # optional: update progress
+      # cli::cli_progress_update(status = paste0("Checking ", basename(u)))
+    }
   }
+  
   # Download
-
-  results <- tibble::tibble(
-    tile_id = codes,
-    file      = dests,
-    geometry  = hits,
-    url       = urls,
-    to_get    = good
-  ) |>
-    mutate(
-      status = purrr::pmap_chr(list(url, file, to_get), function(u, d, ok){
-        if (!ok) return("missing_remote")
-        if (file.exists(d) && !overwrite) return("exists")
-        # Try download
-        ok_dl <- tryCatch({ curl::curl_download(u, d, mode = "wb", quiet = F); TRUE },
-                          error = function(e) { 
-                            cli::cli_alert_warning("Download failed: {basename(d)} → {conditionMessage(e)}"); FALSE }
-                         )
-        if (!ok_dl) return("error")
-        "downloaded"
-      }),
-      size_bytes = ifelse(file.exists(file), file.info(file)$size, NA_real_)
+# 
+#   results <- tibble::tibble(
+#     tile_id = codes,
+#     file      = dests,
+#     geometry  = hits,
+#     url       = urls,
+#     to_get    = good
+#   ) |>
+#     mutate(
+#       status = purrr::pmap_chr(list(url, file, to_get), function(u, d, ok){
+#         if (!ok) return("missing_remote")
+#         if (file.exists(d) && !overwrite) return("exists")
+#         # Try download
+#         ok_dl <- tryCatch({ curl::curl_download(u, d, mode = "wb", quiet = F); TRUE },
+#                           error = function(e) { 
+#                             cli::cli_alert_warning("Download failed: {basename(d)} - {conditionMessage(e)}"); FALSE }
+#                          )
+#         if (!ok_dl) return("error")
+#         "downloaded"
+#       }),
+#       size_bytes = ifelse(file.exists(file), file.info(file)$size, NA_real_)
+#     )
+  
+  rlang::check_installed(c("curl", "cli", "tibble"))
+  
+  n <- length(codes)
+  status <- character(n)
+  size_bytes <- rep(NA_real_, n)
+  
+  # progress iterator (optional)
+  it <- cli::cli_progress_along(
+    seq_len(n),
+    total = n,
+    clear = FALSE,
+    format = "{cli::pb_spin} Processing {cli::pb_current}/{cli::pb_total}",
+    format_done = "{cli::col_green(cli::symbol$tick)} Done: {cli::pb_total} items."
+  )
+  
+  for (i in it) {
+    u <- urls[i]
+    d <- dests[i]
+    ok_remote <- good[i]
+    
+    # skip if remote is flagged missing
+    if (!ok_remote) {
+      status[i] <- "missing_remote"
+      next
+    }
+    
+    # if file exists and we should not overwrite
+    if (file.exists(d) && !isTRUE(overwrite)) {
+      status[i] <- "exists"
+      # record size if present
+      size_bytes[i] <- if (file.exists(d)) file.info(d)$size else NA_real_
+      next
+    }
+    
+    # ensure parent dir exists
+    parent <- dirname(d)
+    if (!dir.exists(parent)) dir.create(parent, recursive = TRUE, showWarnings = FALSE)
+    
+    # attempt download
+    dl_ok <- tryCatch(
+      {
+        curl::curl_download(u, d, mode = "wb", quiet = TRUE)
+        TRUE
+      },
+      error = function(e) {
+        cli::cli_alert_warning("Download failed: {basename(d)} - {conditionMessage(e)}")
+        FALSE
+      }
     )
+    
+    status[i] <- if (isTRUE(dl_ok) && file.exists(d)) "downloaded" else "error"
+    size_bytes[i] <- if (file.exists(d)) file.info(d)$size else NA_real_
+  }
+  
+  # assemble result (as tibble if tibble is available)
+  results <- data.frame(
+    tile_id = codes,
+    file = dests,
+    geometry = I(hits),   # I() to keep list-columns if geometry/hits are lists
+    url = urls,
+    to_get = good,
+    status = status,
+    size_bytes = size_bytes,
+    stringsAsFactors = FALSE
+  )
+  
+  # optional: return as tibble for nicer printing
+  results <- tibble::as_tibble(results)
   
   
   cli::cli_alert_info(sprintf(

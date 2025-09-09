@@ -9,7 +9,7 @@ fetch_ndvi(
   from,
   to,
   out_dir,
-  res_m = 20,
+  res_m = 10,
   max_px = 2500,
   overlap_px = 0,
   evalscript = ndvi_evalscript_path(),
@@ -36,8 +36,7 @@ Used when splitting AOIs into tiles.}
 
 \item{overlap_px}{Overlap (in pixels) to add around each tile (default \code{0}).}
 
-\item{evalscript}{Path to SentinelHub evalscript file (default
-\code{\link[=ndvi_evalscript_path]{ndvi_evalscript_path()}}).}
+\item{evalscript}{Path to SentinelHub evalscript file.}
 
 \item{client}{OAuth client object for CDSE, e.g. from
 \code{CDSE::GetOAuthClient(id=..., secret=...)}.}
@@ -51,8 +50,8 @@ Used when splitting AOIs into tiles.}
 \value{
 The input \code{df}, with additional attributes:
 \itemize{
-\item \code{ndvi_tiles} — an \code{sf} object of tiles with download status and file paths.
-\item \code{ndvi_fetch_params} — list of parameters used.
+\item \code{ndvi_tiles} - an \code{sf} object of tiles with download status and file paths.
+\item \code{ndvi_fetch_params} - list of parameters used.
 }
 }
 \description{
@@ -67,9 +66,8 @@ This function is AOI-agnostic: it works for H3-derived AOIs
 
 The function:
 \enumerate{
-\item Calls \code{\link[=make_request_tiles]{make_request_tiles()}} on the AOI.
-\item Iterates through each tile and calls \code{\link[=cdse_fetch_chip]{cdse_fetch_chip()}}.
-\item Handles errors gracefully with \pkg{purrr::safely}.
+\item Creates request tiles on the AOI.
+\item Iterates through each tile and fetches the satellite data.
 \item Applies a rate limit to avoid hitting API caps.
 \item Builds an \code{sf} index of all tiles with columns:
 \code{tile_id}, \code{geometry}, \code{file}, \code{status}, \code{msg}.
@@ -103,5 +101,4 @@ attr(df, "ndvi_tiles")
 }
 \seealso{
 \code{\link[=mutate_aoi_h3]{mutate_aoi_h3()}}, \code{\link[=mutate_aoi_buffer]{mutate_aoi_buffer()}}, \code{\link[=attach_ndvi]{attach_ndvi()}},
-\code{\link[=make_request_tiles]{make_request_tiles()}}, \code{\link[=cdse_fetch_chip]{cdse_fetch_chip()}}
 }

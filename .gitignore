@@ -12,6 +12,7 @@ old/
 analysis.R
 docs/
 data/
+.data
 
 .RDataTmp
 

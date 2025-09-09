@@ -80,7 +80,11 @@ mutate_aoi_h3 <- function(df, lat = "lat", lon = "lon", res = 10, .name = "h3") 
   #  sf::st_make_valid()
   
   # store AOIs and parameters on df
-  attr(df, "traktr_aoi") <- dplyr::select(aoi, !!id_sym, geometry)
+
+  attr(df, "traktr_aoi") <- dplyr::select(aoi, dplyr::all_of(c(.name, attr(aoi, "sf_column")   )))
+  
+  
+  #attr(df, "traktr_aoi") <- aoi |> dplyr::select(dplyr::all_of(c("id_sym", "geometry")))
   attr(df, "traktr_aoi_params") <- list(
     method = "h3",
     res = res,
@@ -172,14 +176,20 @@ mutate_aoi_buffer <- function(df, lat = "lat", lon = "lon",
   
   # One AOI per row (only where coords are valid)
   bufs <- sf::st_buffer(pts, dist) |> sf::st_make_valid()
-  aoi <- bufs |>
-    dplyr::transmute(.row_id__ = .data$.row_id__) |>
+  #aoi <- bufs |>
+  #  dplyr::transmute(.row_id__ = .data$.row_id__) |>
+  #  sf::st_transform(4326)
+  
+  aoi <- bufs[, c(".row_id__", attr(bufs, "sf_column")), drop = FALSE] |>
     sf::st_transform(4326)
   
   # Assign sequential AOI IDs following the valid-row order
   # aoi[[.name]] <- seq_len(nrow(aoi))
   aoi[[.name]] <- sprintf("aoi_%03d", seq_len(nrow(aoi)))
-  aoi <- aoi |> dplyr::select(dplyr::all_of(.name), .row_id__, geometry)
+  #aoi <- aoi |> dplyr::select(dplyr::all_of(.name), .row_id__, geometry)
+  #print(colnames(aoi))
+  
+  aoi <- aoi[ , c(.name, ".row_id__", attr(bufs, "sf_column")), drop = FALSE]
   
   # Map AOI ID back to df via row id (rows with NA coords get NA aoi_id)
   df <- df |>
@@ -190,7 +200,9 @@ mutate_aoi_buffer <- function(df, lat = "lat", lon = "lon",
   df$.row_id__ <- NULL
   
   # Store AOIs (only the necessary columns) as attribute
-  aoi_attr <- aoi |> dplyr::select(dplyr::all_of(.name), geometry)
+  aoi_attr <- aoi[ , c(.name, attr(bufs, "sf_column")), drop = FALSE]
+  
+  #aoi |> dplyr::select(dplyr::all_of(c(.name, "geometry")))
   
   attr(df, "traktr_aoi") <- aoi_attr
   attr(df, "traktr_aoi_params") <- list(

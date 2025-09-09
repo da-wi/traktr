@@ -39,7 +39,7 @@ The input AOI with two attributes attached:
 \description{
 Downloads 10-meter land-cover classification tiles from the
 \href{https://esa-worldcover.org}{ESA WorldCover} AWS Open Data repository
-for a given AOI. The AOI is split into 3°x3° grid tiles, and matching
+for a given AOI. The AOI is split into 3 deg x 3 deg grid tiles, and matching
 WorldCover TIFFs are downloaded to a local directory.
 }
 \examples{
@@ -53,5 +53,5 @@ attr(result, "worldcover_tiles")
 
 }
 \seealso{
-\link{https://esa-worldcover.org}, \code{\link[curl:curl_download]{curl::curl_download()}}
+\href{https://esa-worldcover.org}{ESA WorldCover}, \code{\link[curl:curl_download]{curl::curl_download()}}
 }

@@ -279,3 +279,19 @@ ggsave(
   "man/figures/README-plot01.png",
   width = 5, height = 3.5, dpi = 150
 )
+
+
+gps_data_Z313 <- gps_data |> filter(subject == "Z313")
+gps_data_Z313_rich <- gps_data |> filter(subject == "Z313") |>
+  select(lat, lon, subject, timestamp) |>
+  mutate_aoi_h3(lat = "lat", lon = "lon") |>
+  fetch_ndvi(
+    from = min(gps_data_Z313$timestamp),
+    to   = max(gps_data_Z313$timestamp),
+    out_dir = "output/.ndvi",
+    client = oauth,
+    res_m = 10
+  ) |>
+  attach_ndvi() |>
+  fetch_landuse(out_dir = "output/.landuse") |>
+  attach_landuse()
