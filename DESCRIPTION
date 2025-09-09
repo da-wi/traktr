@@ -10,23 +10,17 @@ Roxygen: list(markdown = TRUE)
 Depends:
     R (>= 4.1.0)
 Imports:
+    CDSE,
+    cli,
+    curl,
+    dplyr,
+    exactextractr,    
+    h3jsr,
+    ratelimitr,
+    rlang,
     sf,
     terra,
-    dplyr,
-    tibble,
-    rlang,
-    curl,
-    tidyselect,
-    tidyr,
-    purrr,
-    glue,
-    cli,
-    exactextractr,
-    h3jsr,
-    readr,
-    stringr,
-    ratelimitr,
-    CDSE
+    tibble
 Suggests:
     ggplot2,
     cartographr,

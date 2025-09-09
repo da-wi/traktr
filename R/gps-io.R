@@ -36,7 +36,7 @@
 #'
 #' @export
 read_gps_csv <- function(pattern, dir = NULL) {
-  rlang::check_installed(c("readr", "dplyr", "stringr", "cli", "tibble"))
+  rlang::check_installed(c("readr", "dplyr", "cli", "tibble"))
   
   root_env <- Sys.getenv("GPS_SMB_ROOT", "")
   src_dir <- if (!is.null(dir)) {
@@ -74,13 +74,20 @@ read_gps_csv <- function(pattern, dir = NULL) {
   for (i in seq_along(files)) {
     #cli::cli_progress_update(id = pb, status = paste0("Reading ", basename(files[i])))
     
-    subj <- stringr::str_extract(basename(files[i]), "^[A-Za-z]\\d{3}")
+    #subj <- stringr::str_extract(basename(files[i]), "^[A-Za-z]\\d{3}")
+    x <- basename(files[i])
+    m <- regexpr("^[A-Za-z]\\d{3}", x, perl = TRUE)
+    subj <- if (m[1] == -1L) NA_character_ else regmatches(x, m)
+    
     if (is.na(subj)) {
       cli::cli_warn("Couldn't extract subject ID from: {basename(files[i])}")
     }
     
-    res <- readr::read_csv(files[i], show_col_types = FALSE, progress = FALSE) |>
-      dplyr::mutate(subject = subj)
+    #res <- readr::read_csv(files[i], show_col_types = FALSE, progress = FALSE) |>
+    #  dplyr::mutate(subject = subj)
+    
+    res <- utils::read.csv(files[i], stringsAsFactors = FALSE)
+    res$subject <- subj
     
     # Required columns check (adjust to your schema as needed)
     required_cols <- c("timestamp", "lat")

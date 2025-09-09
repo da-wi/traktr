@@ -5,7 +5,8 @@ library(cartographr)
 
 #gps_data <- read_gps_csv(pattern = paste0("^Z31(2|3).*\\.csv$"))  |> 
 #  select(subject, timestamp, lat, lon, direction, speed)
-
+gps_data1 <- read_gps_csv(pattern = paste0("^Z.*\\.csv$"))  |> 
+  select(subject, timestamp, lat, lon, direction, speed)
 gps_data <- read_gps_csv(pattern = paste0("^Z.*\\.csv$"))  |> 
   select(subject, timestamp, lat, lon, direction, speed)
 

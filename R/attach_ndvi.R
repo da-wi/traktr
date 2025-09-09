@@ -56,7 +56,7 @@ attach_ndvi <- function(df, out_dir, summary = "mean", drop_geometry = FALSE) {
                          spinner = TRUE)
   aoi <- attr(df, "traktr_aoi")
   if (is.null(aoi) || !"sf" %in% class(aoi)) {
-    rlang::abort("No AOI found: call a mutate_aoi_*() function first.")
+    cli::cli_abort("No AOI found: call a mutate_aoi_*() function first.")
   }
   params <- attr(df, "traktr_aoi_params")
   id_col <- if (!is.null(params) && !is.null(params$id_col)) params$id_col else {
@@ -64,21 +64,21 @@ attach_ndvi <- function(df, out_dir, summary = "mean", drop_geometry = FALSE) {
     setdiff(names(aoi), attr(aoi, "sf_column"))[1]
   }
   if (is.null(id_col) || !id_col %in% names(aoi))
-    rlang::abort("Cannot determine AOI id column; set attr(df, 'traktr_aoi_params')$id_col.")
+    cli::cli_abort("Cannot determine AOI id column; set attr(df, 'traktr_aoi_params')$id_col.")
   
   # ensure df has the id column to join on
   if (!id_col %in% names(df)) {
-    rlang::abort(paste0("Input df does not contain AOI id column '", id_col, "'."))
+    cli::cli_abort(paste0("Input df does not contain AOI id column '", id_col, "'."))
   }
   
   # Collect chip files
   tiles <- attr(df, "ndvi_aoi")
   if (is.null(tiles)) {
     files <- list.files(out_dir, "\\.tif$", full.names = TRUE)
-    if (!length(files)) rlang::abort("No NDVI files found (empty out_dir).")
+    if (!length(files)) cli::cli_abort("No NDVI files found (empty out_dir).")
   } else {
     files <- dplyr::filter(tiles, !is.na(tiles$file))$file
-    if (!length(files)) rlang::abort("No NDVI files recorded in attr(df,'ndvi_aoi').")
+    if (!length(files)) cli::cli_abort("No NDVI files recorded in attr(df,'ndvi_aoi').")
   }
   
   if ("geometry" %in% names(df)) {
@@ -97,9 +97,7 @@ attach_ndvi <- function(df, out_dir, summary = "mean", drop_geometry = FALSE) {
     aoi_r <- aoi_r[!duplicated(aoi_r$h3), , drop = FALSE]
   }
   
-  #aoi_r <- aoi_r |>
-  #  mutate(!!rlang::sym(glue::glue("ndvi_{summary}")) := exactextractr::exact_extract(virtual_raster, aoi_r, summary, progress = F)[,1])
-  #new_col <- glue::glue("ndvi_{summary}")
+
   new_col <- sprintf("ndvi_%s", summary)
   
   vals <- exactextractr::exact_extract(virtual_raster, aoi_r, summary, progress = FALSE)[, 1]

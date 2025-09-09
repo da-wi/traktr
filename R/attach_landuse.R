@@ -30,7 +30,7 @@ attach_landuse <- function(df,
                            crs_planar = 3857,
                            include_cropland = FALSE,
                            prefix = "lc_") {
-  rlang::check_installed(c("sf", "terra", "dplyr", "tidyr", "purrr", "cli", "exactextractr"))
+  rlang::check_installed(c("sf", "terra", "dplyr", "cli", "exactextractr"))
   
   pb <- cli::cli_progress_bar(
     "attach_landuse()",
@@ -193,12 +193,20 @@ attach_landuse <- function(df,
     
     # Long format without NSE
     tmp <- dplyr::select(per_aoi_class_sums, dplyr::all_of(c(".aoi_row", lc_cols)))
-    comp_long <- tidyr::pivot_longer(
-      tmp,
-      cols = dplyr::all_of(lc_cols),
-      names_to = "lc_name",
-      values_to = "w"
-    )
+    # comp_long <- tidyr::pivot_longer(
+    #   tmp,
+    #   cols = dplyr::all_of(lc_cols),
+    #   names_to = "lc_name",
+    #   values_to = "w"
+    # )
+    
+    # pivot longer
+    id_cols <- setdiff(names(tmp), lc_cols)
+    comp_long <- cbind(tmp[id_cols], utils::stack(tmp[lc_cols]))
+    names(comp_long)[names(comp_long) == "ind"] <- "lc_name"
+    names(comp_long)[names(comp_long) == "values"] <- "w"
+    
+    
     comp_long <- comp_long[!is.na(comp_long$w) & comp_long$w > 0, , drop = FALSE]
     comp_long$lc <- as.integer(sub(prefix, "", comp_long$lc_name))
     
@@ -216,12 +224,12 @@ attach_landuse <- function(df,
   if (nrow(comp_long) > 0) {
     comp_wide <- comp_long
     comp_wide$lc_name <- paste0(prefix, comp_wide$lc)
-    comp_wide <- tidyr::pivot_wider(
-      comp_wide,
-      id_cols     = ".aoi_row",
-      names_from  = "lc_name",
-      values_from = "p",
-      values_fill = 0
+    
+    # pivot_wider
+    tab <- stats::xtabs(p ~ .aoi_row + lc_name, comp_wide)
+    comp_wide <- cbind(
+      .aoi_row = utils::type.convert(rownames(tab), as.is = TRUE),
+      as.data.frame.matrix(tab)
     )
   } else {
     comp_wide <- dplyr::tibble(.aoi_row = integer(0))
@@ -230,32 +238,51 @@ attach_landuse <- function(df,
   # Rollups + Shannon diversity
   veg_core <- c(10, 20, 30, 90, 95, 100)
   veg_plus <- if (include_cropland) c(veg_core, 40) else veg_core
-  blue <- c(80)
-  grey <- c(50, 60)
+  blue     <- 80
+  grey     <- c(50, 60)
   
-  sum_cols <- function(df, codes) {
-    cols <- paste0(prefix, codes)
-    cols <- cols[cols %in% names(df)]
-    if (!length(cols)) return(rep(0, nrow(df)))
+  sum_cols <- function(df, codes) { 
+    cols <- paste0(prefix, codes) 
+    cols <- cols[cols %in% names(df)] 
+    if (!length(cols)) 
+      return(rep(0, nrow(df)))
     rowSums(df[, cols, drop = FALSE], na.rm = TRUE)
+  }
+  
+  stats_tbl <- comp_wide
+  stats_tbl$frac_green_core <- sum_cols(stats_tbl, veg_core)
+  stats_tbl$frac_green_plus <- sum_cols(stats_tbl, veg_plus)
+  stats_tbl$frac_blue       <- sum_cols(stats_tbl, blue)
+  stats_tbl$frac_grey       <- sum_cols(stats_tbl, grey)
+  
+  # Shannon entropy over all columns starting with `prefix`
+  prob_cols <- names(stats_tbl)[startsWith(names(stats_tbl), prefix)]
+  if (length(prob_cols)) {
+    P <- data.matrix(stats_tbl[, prob_cols, drop = FALSE])  # ensure numeric matrix
+    P[P <= 0] <- NA_real_                                   # 0*log(0) -> 0 via NA skip
+    stats_tbl$shannon <- -rowSums(P * log(P), na.rm = TRUE)
+  } else {
+    stats_tbl$shannon <- numeric(nrow(stats_tbl))
   }
   
   cli::cli_progress_update(id = pb, set = 3, status = "Rollups & Shannon / join", force = TRUE)
   
-  stats_tbl <- comp_wide |>
-    dplyr::rowwise() |>
-    dplyr::mutate(
-      frac_green_core = sum_cols(dplyr::cur_data(), veg_core)[1],
-      frac_green_plus = sum_cols(dplyr::cur_data(), veg_plus)[1],
-      frac_blue       = sum_cols(dplyr::cur_data(), blue)[1],
-      frac_grey       = sum_cols(dplyr::cur_data(), grey)[1],
-      shannon = {
-        probs <- as.numeric(dplyr::c_across(tidyselect::starts_with(prefix)))
-        probs <- probs[probs > 0]
-        if (length(probs)) -sum(probs * log(probs)) else 0
-      }
-    ) |>
-    dplyr::ungroup()
+  # stats_tbl <- comp_wide |>
+  #   dplyr::rowwise() |>
+  #   dplyr::mutate(
+  #     frac_green_core = sum_cols(dplyr::cur_data(), veg_core)[1],
+  #     frac_green_plus = sum_cols(dplyr::cur_data(), veg_plus)[1],
+  #     frac_blue       = sum_cols(dplyr::cur_data(), blue)[1],
+  #     frac_grey       = sum_cols(dplyr::cur_data(), grey)[1],
+  #     shannon = {
+  #       probs <- as.numeric(dplyr::c_across(tidyselect::starts_with(prefix)))
+  #       probs <- probs[probs > 0]
+  #       if (length(probs)) -sum(probs * log(probs)) else 0
+  #     }
+  #   ) |>
+  #   dplyr::ungroup()
+  
+  #print(stats_tbl)
   
   # Per-AOI table
   per_aoi <- aoi_unique |>

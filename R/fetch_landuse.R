@@ -71,15 +71,27 @@ fetch_landuse <- function(
     bb <- st_bbox(poly)
     lat_ll <- as.integer(bb["ymin"])
     lon_ll <- as.integer(bb["xmin"])
-    lat_tag <- if (lat_ll < 0) paste0("S", stringr::str_pad(abs(lat_ll), 2, pad = "0"))
-    else            paste0("N", stringr::str_pad(lat_ll,      2, pad = "0"))
-    lon_tag <- if (lon_ll < 0) paste0("W", stringr::str_pad(abs(lon_ll), 3, pad = "0"))
-    else            paste0("E", stringr::str_pad(lon_ll,      3, pad = "0"))
+    lat_tag <- if (lat_ll < 0) {
+      paste0("S", sprintf("%02d", abs(lat_ll)))
+    } else {
+      paste0("N", sprintf("%02d", lat_ll))
+    }
+    
+    lon_tag <- if (lon_ll < 0) {
+      paste0("W", sprintf("%03d", abs(lon_ll)))
+    } else {
+      paste0("E", sprintf("%03d", lon_ll))
+    }
+    #lat_tag <- if (lat_ll < 0) paste0("S", stringr::str_pad(abs(lat_ll), 2, pad = "0"))
+    #else            paste0("N", stringr::str_pad(lat_ll,      2, pad = "0"))
+    #lon_tag <- if (lon_ll < 0) paste0("W", stringr::str_pad(abs(lon_ll), 3, pad = "0"))
+    #else            paste0("E", stringr::str_pad(lon_ll,      3, pad = "0"))
     paste0(lat_tag, lon_tag)
   }
   
 
-  codes <- unique(purrr::map_chr(hits$x, tile_code_from_poly))
+  #codes <- unique(purrr::map_chr(hits$x, tile_code_from_poly))
+  codes <- unique(vapply(hits$x, tile_code_from_poly, character(1)))
   
   
   s3_base <- "https://esa-worldcover.s3.eu-central-1.amazonaws.com"
@@ -102,7 +114,6 @@ fetch_landuse <- function(
   #  })
   #  }
   
-  rlang::check_installed("curl")
   good <- rep(TRUE, length(urls))
   if (check_exists_remote) {
     cli::cli_alert_info("Checking remote availability with HEAD requests ...")

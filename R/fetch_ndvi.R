@@ -72,7 +72,7 @@ fetch_ndvi <- function(df, from, to, out_dir,
                        evalscript = ndvi_evalscript_path(),
                        client, rate_n = 2, rate_period = 1,
                        overwrite = FALSE) {
-  rlang::check_installed(c("cli","ratelimitr","purrr","tibble","dplyr","sf","glue"))
+  rlang::check_installed(c("cli","ratelimitr","tibble","sf"))
   
   aoi <- attr(df, "traktr_aoi")
   if (is.null(aoi) || !"sf" %in% class(aoi)) {
@@ -89,19 +89,58 @@ fetch_ndvi <- function(df, from, to, out_dir,
   sanitize <- function(x) gsub("[-.]", "_", format(x, scientific = FALSE))
   
   # 2) Safe + Rate-limit
-  safe_one <- purrr::safely(function(i) {
-    bbox <- sf::st_bbox(tiles$chips_wgs84[i, ])
-    
-    filename <- glue::glue(
-      "ndvi_{sanitize(bbox$xmin)}_{sanitize(bbox$ymin)}_{sanitize(bbox$xmax)}_{sanitize(bbox$ymax)}_{as.character(as.Date(from))}_{as.character(as.Date(to))}.tif"
-    )
-    
-    out_file <- file.path(out_dir, filename)
-    
-    #out_file <- file.path(out_dir, sprintf("ndvi_%06d.tif", tiles$chips_wgs84$tile_id[i]))
-    
-    cdse_fetch_chip(tiles$chips_wgs84[i, ], from, to, evalscript, out_file,  resolution = res_m, client = client)
-  })
+  # safe_one <- purrr::safely(function(i) {
+  #   bbox <- sf::st_bbox(tiles$chips_wgs84[i, ])
+  #   
+  #   #filename <- glue::glue(
+  #    # "ndvi_{sanitize(bbox$xmin)}_{sanitize(bbox$ymin)}_{sanitize(bbox$xmax)}_{sanitize(bbox$ymax)}_{as.character(as.Date(from))}_{as.character(as.Date(to))}.tif"
+  #   #)
+  #   filename <- sprintf(
+  #     "ndvi_%s_%s_%s_%s_%s_%s.tif",
+  #     sanitize(bbox$xmin),
+  #     sanitize(bbox$ymin),
+  #     sanitize(bbox$xmax),
+  #     sanitize(bbox$ymax),
+  #     as.character(as.Date(from)),
+  #     as.character(as.Date(to))
+  #   )
+  #   
+  #   out_file <- file.path(out_dir, filename)
+  #   
+  #   #out_file <- file.path(out_dir, sprintf("ndvi_%06d.tif", tiles$chips_wgs84$tile_id[i]))
+  #   
+  #   cdse_fetch_chip(tiles$chips_wgs84[i, ], from, to, evalscript, out_file,  resolution = res_m, client = client)
+  # })
+  safe_one <- function(i) {
+    tryCatch({
+      bbox <- sf::st_bbox(tiles$chips_wgs84[i, ])
+      
+      filename <- sprintf(
+        "ndvi_%s_%s_%s_%s_%s_%s.tif",
+        sanitize(bbox$xmin),
+        sanitize(bbox$ymin),
+        sanitize(bbox$xmax),
+        sanitize(bbox$ymax),
+        as.character(as.Date(from)),
+        as.character(as.Date(to))
+      )
+      
+      out_file <- file.path(out_dir, filename)
+      
+      result <- cdse_fetch_chip(
+        tiles$chips_wgs84[i, ],
+        from, to,
+        evalscript,
+        out_file,
+        resolution = res_m,
+        client = client
+      )
+      
+      list(result = result, error = NULL)
+    }, error = function(e) {
+      list(result = NULL, error = e)
+    })
+  }
   
   
   limited <- ratelimitr::limit_rate(safe_one, ratelimitr::rate(n = rate_n, period = rate_period))
@@ -121,8 +160,14 @@ fetch_ndvi <- function(df, from, to, out_dir,
     
     bbox <- sf::st_bbox(tiles$chips_wgs84[i, ])
     
-    filename <- glue::glue(
-      "ndvi_{sanitize(bbox$xmin)}_{sanitize(bbox$ymin)}_{sanitize(bbox$xmax)}_{sanitize(bbox$ymax)}_{as.character(as.Date(from))}_{as.character(as.Date(to))}.tif"
+    filename <- sprintf(
+      "ndvi_%s_%s_%s_%s_%s_%s.tif",
+      sanitize(bbox$xmin),
+      sanitize(bbox$ymin),
+      sanitize(bbox$xmax),
+      sanitize(bbox$ymax),
+      as.character(as.Date(from)),
+      as.character(as.Date(to))
     )
     
     out_file <- file.path(out_dir, filename)
@@ -155,7 +200,10 @@ fetch_ndvi <- function(df, from, to, out_dir,
   }
   cli::cli_progress_done(id = pb)
   
-  results <- dplyr::bind_rows(res_list)
+  #results <- dplyr::bind_rows(res_list)
+  results <- do.call(rbind, res_list)
+  #results <- data.table::rbindlist(res_list, fill = TRUE)
+  
   
   if ("id" %in% names(results) && !"tile_id" %in% names(results)) {
     #results <- dplyr::rename(results, tile_id = id)
@@ -165,11 +213,20 @@ fetch_ndvi <- function(df, from, to, out_dir,
     
   }
   
-  tile_index <- dplyr::left_join(
-    tiles$chips_wgs84 |> dplyr::select(dplyr::any_of(c("tile_id", "geometry"))),
-    results |> dplyr::select(dplyr::any_of(c("tile_id","file","status","msg"))),
-    by = "tile_id"
-  )
+  #tile_index <- dplyr::left_join(
+  #  tiles$chips_wgs84 |> dplyr::select(dplyr::any_of(c("tile_id", "geometry"))),
+  #  results |> dplyr::select(dplyr::any_of(c("tile_id","file","status","msg"))),
+  #  by = "tile_id"
+  #)
+  # Select columns from tiles
+  left <- tiles$chips_wgs84[, intersect(names(tiles$chips_wgs84), c("tile_id", "geometry")), drop = FALSE]
+  
+  # Select columns from results
+  right <- results[, intersect(names(results), c("tile_id", "file", "status", "msg")), drop = FALSE]
+  
+  # Left join
+  tile_index <- merge(left, right, by = "tile_id", all.x = TRUE)
+  
   tile_index <- sf::st_as_sf(tile_index)
   attr(df, "ndvi_aoi") <- tile_index
   attr(df, "ndvi_fetch_params") <- list(
@@ -258,8 +315,10 @@ make_request_tiles <- function(aoi, res_m = 20, max_px = 2500,
                        cellsize = c(tile_size_m, tile_size_m),
                        what = "polygons", square = TRUE)
   
-  grid_sf <- sf::st_as_sf(grid) |>
-    dplyr::mutate(tile_id = row_number())
+  #grid_sf <- sf::st_as_sf(grid) |>
+    #dplyr::mutate(tile_id = row_number())
+  grid_sf <- sf::st_as_sf(grid)
+  grid_sf$tile_id <- seq_len(nrow(grid_sf))
   
   # nur Zellen behalten, die AOI schneiden
   has_int <- lengths(sf::st_intersects(grid_sf, aoi_m)) > 0
@@ -277,9 +336,10 @@ make_request_tiles <- function(aoi, res_m = 20, max_px = 2500,
   suppressWarnings({
     aoi_union <- sf::st_union(sf::st_geometry(aoi_m))
     # auf AOI clippen -> "leere" Bereiche entfallen
-    chips_m <- sf::st_intersection(st_as_sf(grid_sel_buf), aoi_union) |>
-      sf::st_make_valid() |>
-      dplyr::mutate(tile_id = grid_sel$tile_id)
+    # Perform spatial intersection
+    chips_m <- sf::st_intersection(sf::st_as_sf(grid_sel_buf), aoi_union)
+    chips_m <- sf::st_make_valid(chips_m)
+    chips_m$tile_id <- grid_sel$tile_id
   })
   
   # Tiny slivers entfernen
@@ -323,16 +383,28 @@ make_request_tiles <- function(aoi, res_m = 20, max_px = 2500,
   width_px  <- ceiling(width_m / res_m)
   height_px <- ceiling(height_m / res_m)
   
-  chips_m <- chips_m |>
-    dplyr::mutate(
-      width_m  = width_m,
-      height_m = height_m,
-      width_px  = width_px,
-      height_px = height_px,
-      bb = bboxes
-    ) |>
-    dplyr::select(dplyr::all_of(c("tile_id", "area_m2", "width_m", "height_m", "width_px", "height_px", attr(chips_m, "sf_column"))))
+  # chips_m <- chips_m |>
+  #   dplyr::mutate(
+  #     width_m  = width_m,
+  #     height_m = height_m,
+  #     width_px  = width_px,
+  #     height_px = height_px,
+  #     bb = bboxes
+  #   ) |>
+  #   dplyr::select(dplyr::all_of(c("tile_id", "area_m2", "width_m", "height_m", "width_px", "height_px", attr(chips_m, "sf_column"))))
+  # # Add/overwrite columns
+  chips_m$width_m   <- width_m
+  chips_m$height_m  <- height_m
+  chips_m$width_px  <- width_px
+  chips_m$height_px <- height_px
+  chips_m$bb        <- bboxes
   
+  # Dynamically get the geometry column name
+  geom_col <- attr(chips_m, "sf_column")
+  
+  # Select only specified columns
+  cols_to_keep <- c("tile_id", "area_m2", "width_m", "height_m", "width_px", "height_px", geom_col)
+  chips_m <- chips_m[, intersect(cols_to_keep, names(chips_m)), drop = FALSE]
   
   
   # Hinweis, falls etwas noch zu gross ist
