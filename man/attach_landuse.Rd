@@ -2,49 +2,79 @@
 % Please edit documentation in R/attach_landuse.R
 \name{attach_landuse}
 \alias{attach_landuse}
-\title{Attach ESA WorldCover land-use composition per AOI (area-weighted)}
+\title{Attach land-cover composition to an AOI}
 \usage{
 attach_landuse(
   df,
   out_dir = NULL,
-  exact = TRUE,
   deduplicate = TRUE,
   crs_planar = 3857,
   include_cropland = FALSE,
-  prefix = "lc_"
+  prefix = "lc_",
+  progress = TRUE
 )
 }
 \arguments{
-\item{df}{A data frame of GPS or other observations that already has an AOI id
-column (e.g. created via \code{\link[=mutate_aoi_h3]{mutate_aoi_h3()}} or \code{\link[=mutate_aoi_buffer]{mutate_aoi_buffer()}}) and
-AOI metadata in \code{attr(df, "traktr_aoi")} and \code{attr(df, "traktr_aoi_params")}.}
+\item{df}{A data object carrying the AOI (produced by \code{mutate_aoi_*()}).
+Must contain an AOI identifier column and have an attached AOI geometry.}
 
-\item{out_dir}{Out dir
-If NULL, the function tries \code{attr(df, "worldcover")} or \code{attr(df, "landcover")}.}
+\item{out_dir}{Directory where WorldCover GeoTIFF files are located. Used if
+no recorded tiles are found in \code{attr(df, "worldcover_tiles")}.}
 
-\item{exact}{Use area-weighted extraction (\code{terra::extract(..., exact=TRUE)}).}
+\item{deduplicate}{Logical. If \code{TRUE} (default), AOIs with identical
+geometry are extracted only once, then mapped back.}
 
-\item{deduplicate}{If TRUE, AOIs with identical geometry are computed once.}
+\item{crs_planar}{EPSG code of the projected CRS used to compute surface
+areas in meters. Defaults to Web Mercator (EPSG:3857).}
 
-\item{crs_planar}{CRS used for area computations (default 3857).}
+\item{include_cropland}{Logical. If \code{TRUE}, cropland (class 40) is
+included in the "green+" rollup.}
 
-\item{include_cropland}{If TRUE, cropland (40) is counted in \code{frac_green_plus}.}
+\item{prefix}{Prefix for output column names. Default is \code{"lc_"}.}
 
-\item{prefix}{Column name prefix for per-class fractions (default "lc_").}
+\item{progress}{Logical. If \code{TRUE} (default), show progress messages
+during extraction.}
 }
 \value{
-\code{df} with new columns:
-\itemize{
-\item per-class fractions \verb{lc_<code>} (0..1),
-\item rollups: \code{frac_green_core}, \code{frac_green_plus}, \code{frac_blue}, \code{frac_grey},
-\item \code{shannon} (land-cover diversity), \code{wc_cover} (covered fraction), \code{aoi_area_m2}.
-Also adds attribute \code{attr(df, "landuse_table")} (per-AOI table).
-}
+The input \code{df}, augmented with land-cover composition columns.
 }
 \description{
-Computes per-class fractions from WorldCover (10 m, categorical) for each AOI
-stored in \code{attr(df, "traktr_aoi")} and joins results back to \code{df} by the AOI id.
+Extracts ESA WorldCover land-cover classes from GeoTIFF tiles covering an
+AOI, computes per-class proportions, rollups (green, blue, grey fractions),
+Shannon diversity, and joins them back to the input data. All fractions are
+area-weighted in square meters, ensuring comparability across latitudes and
+AOI sizes.
 }
+\details{
+\itemize{
+\item AOI handling: The AOI is validated and transformed to \code{crs_planar}
+to ensure that surface area is measured in square meters.
+\item Summaries: Each land-cover class is weighted by its overlap area (m²).
+\item Output: Per-class proportion columns (e.g. \code{lc_10}, \code{lc_20}),
+rollups (\code{frac_green_core}, \code{frac_green_plus},
+\code{frac_blue}, \code{frac_grey}), and \code{shannon} diversity.
+}
+}
+\section{Attributes}{
+
+Attributes of \code{df} are preserved. AOI and fetch metadata (e.g.,
+\code{attr(df, "traktr_aoi")}, \code{attr(df, "worldcover_tiles")})
+remain available.
+}
+
 \examples{
-# gps |> mutate_aoi_buffer(lat, lon, dist=75) |> fetch_worldcover() |> attach_landuse()
+\dontrun{
+df <- mutate_aoi_buffer(my_points, dist = 100)
+df <- fetch_landuse(df, out_dir = "data/worldcover", year = 2021, version = "v200")
+df <- attach_landuse(df, out_dir = "data/worldcover", crs_planar = 3857)
+
+# Inspect composition
+head(df[, c("aoi_id", "frac_green_core", "shannon")])
+}
+
+}
+\seealso{
+\code{\link{attach_ndvi}},
+\code{\link{mutate_aoi_h3}}, \code{\link{mutate_aoi_buffer}},
+\code{\link{fetch_landuse}}
 }

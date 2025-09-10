@@ -2,7 +2,7 @@
 % Please edit documentation in R/aoi.R
 \name{mutate_aoi_buffer}
 \alias{mutate_aoi_buffer}
-\title{Create buffer-based AOIs (meters) and attach an AOI id column}
+\title{Derive AOI polygons by buffering point coordinates}
 \usage{
 mutate_aoi_buffer(
   df,
@@ -14,60 +14,76 @@ mutate_aoi_buffer(
 )
 }
 \arguments{
-\item{df}{A data frame / tibble containing coordinates.}
+\item{df}{A data frame (or tibble) with point coordinates.}
 
-\item{lat, lon}{Columns in \code{df} holding latitude and longitude (tidy-eval).
-Coordinates are interpreted as WGS84 (EPSG:4326), decimal degrees.}
+\item{lat, lon}{Names (strings or symbols) of the latitude and longitude
+columns in \code{df}. Must be in WGS84 (EPSG:4326).}
 
-\item{dist}{Numeric buffer radius in \strong{meters} (default \code{100}).}
+\item{dist}{Buffer radius in meters (applied in a planar CRS).}
 
-\item{.name}{Character scalar; name of the AOI id column to create
-in \code{df} (default \code{"aoi_id"}).}
+\item{.name}{Name of the output column in \code{df} that stores the AOI ID
+(e.g., \code{"aoi_id"}). If a column of the same name exists, it will be
+overwritten.}
 
-\item{crs_planar}{Integer or CRS used for buffering in meters
-(default \code{3857}, Web Mercator). Buffers are computed in \code{crs_planar}
-and reprojected back to EPSG:4326 in the output attribute.}
+\item{crs_planar}{EPSG code for the planar (projected) CRS used during
+buffering. Defaults to Web Mercator (EPSG:3857).}
 }
 \value{
-\code{df} with a new id column named \code{.name} (character IDs for rows with
-valid coordinates) and the attributes \code{ndvi_aoi} and \code{ndvi_aoi_params} set.
-Class \code{"ndvi_df"} is added.
+The input \code{df}, with a new \code{.name} column (character AOI ID)
+and AOI-related attributes (see Attributes).
 }
 \description{
-Builds circular AOIs (metric buffers) around each row's point
-and stores the resulting polygons as an \code{sf} object in
-\code{attr(df, "ndvi_aoi")}. Also records parameters in
-\code{attr(df, "ndvi_aoi_params")} and adds class \code{"ndvi_df"}.
-Rows with missing/invalid coordinates get \code{NA} in the id column.
+Buffers each valid point row by a given metric distance (after projecting to
+a planar CRS) and writes a sequential AOI ID back to the data. The per-row
+buffer polygons are attached as an AOI \code{sf} for downstream fetching
+functions.
 }
 \details{
-The created attribute \code{attr(df, "ndvi_aoi")} is an \code{sf} object in EPSG:4326
-with one row per input row that had valid coordinates, containing columns
-\verb{(.name, geometry)}. The attribute \code{attr(df, "ndvi_aoi_params")} is a list
-with elements:
 \itemize{
-\item \code{method = "buffer"}
-\item \code{dist_m} (buffer radius in meters)
-\item \code{crs_planar} (CRS used for buffering)
-\item \code{id_col} (the chosen column name in \code{df})
+\item Coordinates are validated; rows with non-finite \code{lat}/\code{lon} get
+\code{NA} in the ID column and no polygon is produced for them.
+\item The function preserves row order and does not reshuffle \code{df}.
+\item One AOI polygon is produced \strong{per valid input row} (not deduplicated).
+\item Buffering is performed in \code{crs_planar}, then geometries are
+transformed back to WGS84 and run through \code{sf::st_make_valid()}.
+\item AOI IDs are sequential strings (e.g., \code{"aoi_001"}).
+\item A standard set of attributes is written to \code{df} for sibling functions.
+}
+}
+\section{Attributes}{
+
+\itemize{
+\item \code{attr(df, "traktr_aoi")}: an \code{sf} with two columns:
+\code{.name} (sequential AOI ID) and \code{geometry}.
+\item \code{attr(df, "traktr_aoi_params")}: a list with
+\code{list(method = "buffer", dist_m = dist, crs_planar = crs_planar, id_col = .name)}.
+\item The input is also marked with class \code{"traktr_df"} for downstream verbs.
+}
 }
 
-This function emits progress messages via \pkg{cli}. It requires packages
-\pkg{sf}, \pkg{dplyr}, \pkg{tibble}, and \pkg{rlang}.
-}
 \examples{
 \dontrun{
-df <- tibble::tibble(lat = c(47.38, 47.39, NA), lon = c(8.53, 8.54, 8.55))
-df2 <- mutate_aoi_buffer(df, lat, lon, dist = 150)
-attr(df2, "ndvi_aoi")            # sf with per-row buffers
-df2$aoi_id[is.na(df$lat)]        # NA where coords were missing
+df <- tibble::tibble(
+  id  = 1:3,
+  lon = c(8.54, 8.55, NA_real_),
+  lat = c(47.37, 47.38, 47.39)
+)
+
+df <- mutate_aoi_buffer(
+  df,
+  lat = lat, lon = lon,
+  dist = 100,
+  .name = "aoi_id",
+  crs_planar = 3857
+)
+
+# Inspect AOI IDs and polygons
+df$aoi_id
+attr(df, "traktr_aoi")
 }
 
 }
 \seealso{
-\code{\link[=mutate_aoi_h3]{mutate_aoi_h3()}}, \code{\link[=fetch_ndvi]{fetch_ndvi()}}, \code{\link[=attach_ndvi]{attach_ndvi()}}
-
-Other AOI functions: 
-\code{\link{mutate_aoi_h3}()}
+\code{\link{mutate_aoi_h3}},
+\code{\link{fetch_ndvi}}, \code{\link{fetch_landuse}}
 }
-\concept{AOI functions}

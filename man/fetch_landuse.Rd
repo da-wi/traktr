@@ -2,56 +2,104 @@
 % Please edit documentation in R/fetch_landuse.R
 \name{fetch_landuse}
 \alias{fetch_landuse}
-\title{Fetch ESA WorldCover tiles for a given AOI}
+\title{Fetch ESA WorldCover 10 m tiles covering an AOI}
 \usage{
 fetch_landuse(
   df,
   out_dir,
-  wc_year = 2021,
-  wc_version = "v200",
+  year = 2021,
+  version = "v200",
   layer = "map",
+  check_remote = FALSE,
   overwrite = FALSE,
-  check_exists_remote = FALSE
+  progress = TRUE,
+  aoi = NULL,
+  wc_year = NULL,
+  wc_version = NULL,
+  check_exists_remote = NULL
 )
 }
 \arguments{
-\item{df}{An \code{sf} polygon or multipolygon representing the AOI. Must have a valid CRS.}
+\item{df}{A data object carrying the AOI. If \code{aoi} is not supplied,
+the function reads \code{attr(df, "traktr_aoi")}. The AOI must be an
+\code{sf} polygon/multipolygon with a valid CRS.}
 
-\item{out_dir}{Output directory where downloaded \code{.tif} files will be saved.}
+\item{out_dir}{Directory where output GeoTIFF files are written. Will be
+created if it does not exist.}
 
-\item{wc_year}{WorldCover year, either \code{2020} or \code{2021} (default: \code{2021}).}
+\item{year}{WorldCover reference year. For example, 2020 (v100) or
+2021 (v200).}
 
-\item{wc_version}{Version tag; \code{"v100"} for 2020 or \code{"v200"} for 2021 (default: \code{"v200"}).}
+\item{version}{WorldCover product version string, e.g. \code{"v100"} or
+\code{"v200"}.}
 
-\item{layer}{Character; layer type (e.g., \code{"map"} for land-cover classification).}
+\item{layer}{Product layer name. Use \code{"map"} for the 10 m land-cover
+classification layer.}
 
-\item{overwrite}{Logical; if \code{FALSE} (default), skip existing files.}
+\item{check_remote}{Logical. If \code{TRUE}, issue HTTP HEAD requests to
+verify remote availability before downloading.}
 
-\item{check_exists_remote}{Logical; if \code{TRUE}, perform HTTP HEAD check on all tile URLs before download.}
+\item{overwrite}{Logical. If \code{FALSE} (default), existing files are
+skipped. If \code{TRUE}, files are re-downloaded.}
+
+\item{progress}{Logical. If \code{TRUE} (default), show progress messages
+and a progress bar.}
+
+\item{aoi}{Optional \code{sf} polygon/multipolygon. If supplied, overrides
+\code{attr(df, "traktr_aoi")}.}
+
+\item{wc_year}{Deprecated. Use \code{year}.}
+
+\item{wc_version}{Deprecated. Use \code{version}.}
+
+\item{check_exists_remote}{Deprecated. Use \code{check_remote}.}
 }
 \value{
-The input AOI with two attributes attached:
-\describe{
-\item{\code{worldcover_tiles}}{A tibble with one row per tile containing \code{tile_id}, \code{file}, \code{url}, \code{geometry}, \code{status}, and \code{size_bytes}.}
-\item{\code{worldcover_aoi}}{The reprojected AOI in EPSG:4326 used for tile intersection.}
-}
+The input \code{df}, returned invisibly, augmented with attributes
+describing outputs and call parameters (see Details).
 }
 \description{
-Downloads 10-meter land-cover classification tiles from the
-\href{https://esa-worldcover.org}{ESA WorldCover} AWS Open Data repository
-for a given AOI. The AOI is split into 3 deg x 3 deg grid tiles, and matching
-WorldCover TIFFs are downloaded to a local directory.
+Downloads ESA WorldCover 10 m tiles from AWS S3 for all 3 deg grid cells
+that intersect the AOI. The function optionally HEAD-checks URLs, honors
+local caching, and records output metadata on the input object.
+}
+\details{
+\itemize{
+\item AOI handling: The AOI is validated and transformed to EPSG:4326.
+\item Tiling: A regular 3 deg grid (aligned to integer multiples of 3 deg) is
+generated to cover the AOI bounding box. Only cells that intersect the AOI
+are requested. Tile codes follow the lower-left corner convention, e.g.
+N48E006 or S03W072.
+\item Caching: Output filenames are the official WorldCover basenames, which
+remain stable across runs.
+\item Attributes:
+\itemize{
+\item \code{attr(df, "worldcover_tiles")} stores a tibble with per-tile URL,
+file path, status, size, and geometry.
+\item \code{attr(df, "worldcover_aoi")} stores the AOI used (WGS84).
+\item \code{attr(df, "traktr_layers")$worldcover} stores the same information
+in a harmonized container for downstream discovery.
+}
+}
 }
 \examples{
 \dontrun{
-library(sf)
-poly <- st_polygon(list(rbind(c(8,47), c(8.5,47), c(8.5,47.5), c(8,47.5), c(8,47))))
-aoi <- st_as_sf(st_sfc(poly, crs = 4326))
-result <- fetch_worldcover(aoi, out_dir = "worldcover_data")
-attr(result, "worldcover_tiles")
+df <- some_traktr_object_with_aoi()
+df <- fetch_landuse(
+  df,
+  out_dir      = "data/worldcover",
+  year         = 2021,
+  version      = "v200",
+  layer        = "map",
+  check_remote = FALSE,
+  overwrite    = FALSE,
+  progress     = TRUE
+)
+# Inspect results table
+attr(df, "traktr_layers")$worldcover$index
 }
 
 }
 \seealso{
-\href{https://esa-worldcover.org}{ESA WorldCover}, \code{\link[curl:curl_download]{curl::curl_download()}}
+\code{\link{fetch_ndvi}}
 }

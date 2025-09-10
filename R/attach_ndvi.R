@@ -1,124 +1,154 @@
-#' Attach NDVI summaries back to the input data frame
+#' Attach NDVI statistics to an AOI
 #'
-#' Reads fetched NDVI chip files (GeoTIFFs), mosaics them into a virtual raster,
-#' extracts NDVI statistics per AOI (from `attr(df, "traktr_aoi")`), and joins the
-#' results back to the input tibble.
+#' Extracts NDVI values from GeoTIFF chips covering an AOI, computes
+#' area-weighted summary statistics (mean, sd, min, max, median), and joins
+#' them back to the input data. All statistics are weighted by covered surface
+#' area in square meters, ensuring comparability across latitudes and AOI sizes.
 #'
-#' @param df A data frame of GPS or other observations that already has an AOI id
-#'   column (e.g. created via [mutate_aoi_h3()] or [mutate_aoi_buffer()]) and
-#'   AOI metadata in `attr(df, "traktr_aoi")` and `attr(df, "traktr_aoi_params")`.
-#' @param out_dir Directory containing previously fetched NDVI chip `.tif` files
-#'   (as created by [fetch_ndvi()]).
-#' @param summary Summary function to apply in \pkg{exactextractr}
-#'   (e.g. `"mean"`, `"median"`, `"stdev"`). Default `"mean"`.
-#' @param drop_geometry Logical; if `TRUE`, the AOI geometry column is
-#'   dropped after joining. If `FALSE` (default), an `sf` object is returned with geometries
-#'   retained.
+#' @param df A data object carrying the AOI (produced by \code{mutate_aoi_*()}).
+#'   Must contain an AOI identifier column and have an attached AOI geometry.
+#' @param out_dir Directory where NDVI GeoTIFF files are located. Used if
+#'   no recorded tiles are found in \code{attr(df, "ndvi_aoi")}.
+#' @param deduplicate Logical. If \code{TRUE} (default), AOIs with identical
+#'   geometry are extracted only once, then mapped back.
+#' @param crs_planar EPSG code of the projected CRS used to compute surface
+#'   areas in meters. Defaults to Web Mercator (EPSG:3857).
+#' @param prefix Prefix for output column names. Default is \code{"ndvi_"}.
+#' @param progress Logical. If \code{TRUE} (default), show progress messages
+#'   during extraction.
 #'
 #' @details
-#' The function:
-#' \enumerate{
-#'   \item Collects NDVI chip files either from `attr(df,"ndvi_aoi")` or by
-#'   listing `out_dir`.
-#'   \item Builds a lazy mosaic (VRT) using \pkg{terra}.
-#'   \item Reprojects the AOIs to match the raster CRS.
-#'   \item Uses \pkg{exactextractr::exact_extract()} to compute per-AOI summaries
-#'   on the first band (NDVI), ignoring masked areas.
-#'   \item Joins the summary values back into `df` by the AOI id column
-#'   (`attr(df,"ndvi_aoi_params")$id_col`).
-#' }
+#' - AOI handling: The AOI is validated and transformed to \code{crs_planar}
+#'   to ensure that surface area is measured in square meters.
+#' - Summaries: Each NDVI value is weighted by its overlap area (m²) when
+#'   computing the statistics.
+#' - Output: Five new columns are created per AOI:
+#'   \code{ndvi_mean}, \code{ndvi_sd}, \code{ndvi_min}, \code{ndvi_max},
+#'   \code{ndvi_median}.
 #'
-#' For H3-based AOIs, duplicate geometries are deduplicated before extraction.
+#' @section Attributes:
+#' Attributes of \code{df} are preserved. AOI and fetch metadata (e.g.,
+#' \code{attr(df, "traktr_aoi")}, \code{attr(df, "ndvi_aoi")}) remain available.
 #'
-#' The created NDVI column is named `ndvi_<summary>` (e.g. `ndvi_mean`).
+#' @return The input \code{df}, augmented with NDVI summary columns.
 #'
-#' @return A data frame (class `"ndvi_df"`) with an additional NDVI summary column.
-#' If `drop_geometry = FALSE`, the result is an `sf` object with geometries.
+#' @seealso
+#' \code{\link{attach_landuse}},
+#' \code{\link{mutate_aoi_h3}}, \code{\link{mutate_aoi_buffer}},
+#' \code{\link{fetch_ndvi}}
 #'
 #' @examples
 #' \dontrun{
-#' gps <- tibble::tibble(lat = c(47.38, 47.39), lon = c(8.53, 8.54))
-#' df <- gps |>
-#'   mutate_aoi_h3(lat, lon, res = 10) |>
-#'   fetch_ndvi(from = as.Date("2025-04-01"),
-#'              to   = as.Date("2025-07-31"),
-#'              out_dir = "output/ndvi") |>
-#'   attach_ndvi(out_dir = "output/ndvi", summary = "mean")
+#' df <- mutate_aoi_h3(my_points, res = 10)
+#' df <- fetch_ndvi(df, out_dir = "data/ndvi", from = Sys.Date()-30, to = Sys.Date())
+#' df <- attach_ndvi(df, out_dir = "data/ndvi", crs_planar = 3857)
 #'
-#' head(df$ndvi_mean)
+#' # Inspect statistics
+#' head(df[, c("h3", "ndvi_mean", "ndvi_sd")])
 #' }
 #'
-#' @seealso [mutate_aoi_h3()], [mutate_aoi_buffer()], [fetch_ndvi()]
 #' @export
-attach_ndvi <- function(df, out_dir, summary = "mean", drop_geometry = FALSE) {
-  cli::cli_progress_step("Summarizing NDVI data using {cli::col_blue(summary)}",
-                         msg_done = "Summarized NDVI data using {cli::col_blue(summary)}",
-                         spinner = TRUE)
-  aoi <- attr(df, "traktr_aoi")
-  if (is.null(aoi) || !"sf" %in% class(aoi)) {
-    cli::cli_abort("No AOI found: call a mutate_aoi_*() function first.")
-  }
-  params <- attr(df, "traktr_aoi_params")
-  id_col <- if (!is.null(params) && !is.null(params$id_col)) params$id_col else {
-    # fallback: first non-geometry column in AOI
-    setdiff(names(aoi), attr(aoi, "sf_column"))[1]
-  }
-  if (is.null(id_col) || !id_col %in% names(aoi))
-    cli::cli_abort("Cannot determine AOI id column; set attr(df, 'traktr_aoi_params')$id_col.")
+attach_ndvi <- function(df,
+                        out_dir = NULL,
+                        deduplicate = TRUE,
+                        crs_planar = 3857,
+                        prefix = "ndvi_",
+                        progress = TRUE) {
+  # check dependencies
+  rlang::check_installed(c("sf", "terra", "cli", "exactextractr"))
   
-  # ensure df has the id column to join on
-  if (!id_col %in% names(df)) {
-    cli::cli_abort(paste0("Input df does not contain AOI id column '", id_col, "'."))
+  if (isTRUE(progress)) {
+    cli::cli_progress_step("Summarizing NDVI (mean, sd, min, max, median)", spinner = TRUE)
   }
   
-  # Collect chip files
-  tiles <- attr(df, "ndvi_aoi")
-  if (is.null(tiles)) {
-    files <- list.files(out_dir, "\\.tif$", full.names = TRUE)
-    if (!length(files)) cli::cli_abort("No NDVI files found (empty out_dir).")
-  } else {
-    files <- dplyr::filter(tiles, !is.na(tiles$file))$file
-    if (!length(files)) cli::cli_abort("No NDVI files recorded in attr(df,'ndvi_aoi').")
+  # 1. Detect AOI and ID column
+  info   <- .aoi_detect(df)
+  aoi    <- info$aoi
+  id_col <- info$id_col
+  
+  # 2. Collect NDVI raster files
+  files <- .collect_raster_files(df, "ndvi_aoi", out_dir)
+  vrt   <- terra::vrt(terra::sprc(files))
+  
+  # 3. Transform AOI to planar CRS for area-weighted stats
+  aoi_planar <- sf::st_transform(aoi, crs_planar)
+  
+  # 4. Deduplicate AOIs for faster extraction
+  dd   <- .aoi_deduplicate(aoi_planar, id_col = id_col, deduplicate = deduplicate)
+  au   <- dd$aoi_unique
+  map_back <- dd$map_back
+  
+  # 5. Custom summary function (area-weighted)
+  ndvi_summary_fn <- function(values, coverage_fraction) {
+    if (is.data.frame(values)) {
+      v <- rowMeans(as.matrix(values), na.rm = TRUE)
+    } else {
+      v <- values
+    }
+    w <- coverage_fraction
+    ok <- is.finite(v) & is.finite(w) & (w > 0)
+    if (!any(ok)) {
+      return(data.frame(
+        mean   = NA_real_,
+        sd     = NA_real_,
+        min    = NA_real_,
+        max    = NA_real_,
+        median = NA_real_
+      ))
+    }
+    v <- v[ok]; w <- w[ok]
+    w <- w / sum(w)  # normalize weights
+    
+    m     <- sum(v * w)
+    var_w <- sum(w * (v - m)^2)
+    s     <- sqrt(var_w)
+    vmin  <- min(v)
+    vmax  <- max(v)
+    
+    ord   <- order(v)
+    cw    <- cumsum(w[ord])
+    med   <- v[ord][which(cw >= 0.5)[1]]
+    
+    data.frame(
+      mean   = m,
+      sd     = s,
+      min    = vmin,
+      max    = vmax,
+      median = med
+    )
   }
   
-  if ("geometry" %in% names(df)) {
-    #df <- subset(df, select = -geometry)
-    df <- df[ , !(names(df) %in% "geometry")]
+  # 6. Extract values
+  res <- exactextractr::exact_extract(vrt, au, fun = ndvi_summary_fn, progress = FALSE)
+  
+  if (is.list(res) && !is.data.frame(res)) {
+    res <- do.call(rbind, res)
+    rownames(res) <- NULL
+  }
+  if (!nrow(res)) {
+    cli::cli_abort("NDVI extraction returned no results.")
   }
   
-  # create virtual raster from files
-  virtual_raster <- terra::vrt(terra::sprc(files))
-  aoi_r <- sf::st_transform(aoi, terra::crs(virtual_raster))
+  res$.aoi_row <- seq_len(nrow(res))
+  names(res)[names(res) != ".aoi_row"] <- paste0(prefix, names(res)[names(res) != ".aoi_row"])
   
-  # special case h3 
-  if (params$id_col == "h3") {
-    # extract for each distinct h3
-    # keep first occurrence of each h3 (preserves all columns, including geometry)
-    aoi_r <- aoi_r[!duplicated(aoi_r$h3), , drop = FALSE]
+  # 7. Map back to all AOIs
+  per_aoi <- merge(map_back, res, by = ".aoi_row", all.x = TRUE, sort = FALSE)
+  per_aoi$.aoi_row <- NULL
+  
+  # 8. Join back to df; preserve order and attrs
+  df$.__row_order <- seq_len(nrow(df))
+  out <- merge(df, per_aoi, by = id_col, all.x = TRUE, sort = FALSE)
+  out <- out[order(out$.__row_order), , drop = FALSE]
+  out$.__row_order <- NULL
+  
+  if ("geometry" %in% names(out)) {
+    geom_col <- "geometry"
+    out <- out[, c(setdiff(names(out), geom_col), geom_col), drop = FALSE]
   }
   
-
-  new_col <- sprintf("ndvi_%s", summary)
+  out <- .restore_attrs_class(df, out)
   
-  vals <- exactextractr::exact_extract(virtual_raster, aoi_r, summary, progress = FALSE)[, 1]
-  
-  if (length(vals) != nrow(aoi_r)) {
-    cli::cli_abort("Length mismatch: exact_extract returned ", length(vals),
-         " rows but aoi_r has ", nrow(aoi_r))
-  }
-  
-  # assign (works for sf objects too)
-  aoi_r[[new_col]] <- vals
-  
-  # then join back
-  df <- df |> sf::st_drop_geometry() |> dplyr::inner_join(aoi_r, by = id_col)
-  
-  cli::cli_process_done()
-  
-  # drop geometry
-  if (drop_geometry == TRUE) {
-    df |> sf::st_drop_geometry()
-  } else {
-    df |> dplyr::relocate(dplyr::all_of("geometry"), .after = dplyr::last_col()) |> sf::st_as_sf()
-  }
+  if (isTRUE(progress)) cli::cli_progress_done()
+  invisible(out)
 }

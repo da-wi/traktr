@@ -13,7 +13,6 @@ Imports:
     CDSE,
     cli,
     curl,
-    dplyr,
     exactextractr,    
     h3jsr,
     ratelimitr,
@@ -22,10 +21,10 @@ Imports:
     terra,
     tibble
 Suggests:
-    ggplot2,
     cartographr,
-    scales,
-    withr,
+    dplyr,
+    ggplot2,
+    purrr,
     testthat (>= 3.0.0)
 SystemRequirements: GDAL, GEOS, PROJ
 RoxygenNote: 7.3.2

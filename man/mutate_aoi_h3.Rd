@@ -2,59 +2,73 @@
 % Please edit documentation in R/aoi.R
 \name{mutate_aoi_h3}
 \alias{mutate_aoi_h3}
-\title{Create H3-based AOIs and attach an AOI id column}
+\title{Derive AOI polygons from point coordinates using H3}
 \usage{
 mutate_aoi_h3(df, lat = "lat", lon = "lon", res = 10, .name = "h3")
 }
 \arguments{
-\item{df}{A data frame / tibble containing coordinates.}
+\item{df}{A data frame (or tibble) with point coordinates.}
 
-\item{lat, lon}{Columns in \code{df} holding latitude and longitude (tidy-eval).
-Coordinates are interpreted as WGS84 (EPSG:4326), decimal degrees.}
+\item{lat, lon}{Names (strings or symbols) of the latitude and longitude
+columns in \code{df}. Must be in WGS84 (EPSG:4326).}
 
-\item{res}{Integer H3 resolution (default \code{10}).}
+\item{res}{H3 resolution (integer). Higher values yield smaller cells.}
 
-\item{.name}{Character scalar; name of the AOI id column to create
-in \code{df} (default \code{"h3"}).}
+\item{.name}{Name of the output column in \code{df} that stores the H3 ID.
+If a column of the same name exists, it will be overwritten.}
 }
 \value{
-\code{df} with a new id column named \code{.name} (character) and the
-attributes \code{ndvi_aoi} and \code{ndvi_aoi_params} set; class \code{"ndvi_df"} is added.
+The input \code{df}, with a new \code{.name} column (character H3 ID)
+and AOI-related attributes (see Attributes).
 }
 \description{
-Adds an H3 index column to \code{df} from latitude/longitude and stores the
-corresponding H3 polygons as an \code{sf} object in \code{attr(df, "ndvi_aoi")}.
-Also records parameters in \code{attr(df, "ndvi_aoi_params")} and adds class
-\code{"ndvi_df"} to the returned data. Rows with missing/invalid coordinates
-get \code{NA} in the id column.
+Computes H3 cell IDs from latitude/longitude columns and builds one AOI
+polygon per unique cell. The H3 ID is written back to the input data as a
+new column, and an AOI \code{sf} is attached as an attribute for downstream
+fetching functions.
 }
 \details{
-The created attribute \code{attr(df, "ndvi_aoi")} is an \code{sf} object in EPSG:4326
-with one row per unique H3 cell and columns \verb{(.name, geometry)}. No union is
-performed across cells. The attribute \code{attr(df, "ndvi_aoi_params")} is a list
-with elements:
 \itemize{
-\item \code{method = "h3"}
-\item \code{res} (the H3 resolution)
-\item \code{id_col} (the chosen column name in \code{df})
+\item Coordinates are validated; rows with non-finite \code{lat}/\code{lon} get
+\code{NA} in the ID column and do not contribute polygons.
+\item The function preserves row order and does not reshuffle \code{df}.
+\item One AOI polygon is produced per \strong{unique} H3 ID.
+\item The AOI is created as an \code{sf} object in WGS84 and geometries are
+run through \code{sf::st_make_valid()}.
+\item A standard set of attributes is written to \code{df} for sibling functions.
+}
+}
+\section{Attributes}{
+
+\itemize{
+\item \code{attr(df, "traktr_aoi")}: an \code{sf} with two columns:
+\code{.name} (H3 ID) and \code{geometry}.
+\item \code{attr(df, "traktr_aoi_params")}: a list with
+\code{list(method = "h3", res = res, id_col = .name)}.
+\item The input is also marked with class \code{"traktr_df"} for downstream verbs.
+}
 }
 
-This function emits progress messages via \pkg{cli}. It requires packages
-\pkg{h3jsr}, \pkg{sf}, \pkg{dplyr}, \pkg{tibble}, and \pkg{rlang}.
-}
 \examples{
 \dontrun{
-df <- tibble::tibble(lat = c(47.38, 47.39), lon = c(8.53, 8.54))
-df2 <- mutate_aoi_h3(df, lat, lon, res = 10)
-attr(df2, "ndvi_aoi")            # sf with per-cell polygons
-unique(df2$h3)[1:3]              # id column in df
+df <- tibble::tibble(
+  id  = 1:3,
+  lon = c(8.54, 8.55, NA_real_),
+  lat = c(47.37, 47.38, 47.39)
+)
+
+df <- mutate_aoi_h3(df, lat = lat, lon = lon, res = 10, .name = "h3")
+
+# Inspect H3 column and AOI polygons
+df$h3
+attr(df, "traktr_aoi")
+
+# Use AOI with a fetching sibling afterwards
+# df <- fetch_ndvi(df, out_dir = "data/ndvi", from = Sys.Date()-30, to = Sys.Date())
 }
 
 }
 \seealso{
-\code{\link[=mutate_aoi_buffer]{mutate_aoi_buffer()}}, \code{\link[=fetch_ndvi]{fetch_ndvi()}}, \code{\link[=attach_ndvi]{attach_ndvi()}}
-
-Other AOI functions: 
-\code{\link{mutate_aoi_buffer}()}
+\code{\link{mutate_aoi_buffer}},
+\code{\link{fetch_ndvi}}, \code{\link{fetch_landuse}}
 }
-\concept{AOI functions}

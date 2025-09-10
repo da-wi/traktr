@@ -30,8 +30,7 @@ A \code{subject} column is extracted from the filename using a regex pattern.
 If both \code{dir} and the \code{GPS_SMB_ROOT} environment variable are missing or empty,
 the function will abort with an informative error.
 
-Progress is displayed using the \pkg{cli} package. Files are read with
-\code{\link[readr:read_delim]{readr::read_csv()}} using \code{show_col_types = FALSE}.
+Progress is displayed using the \pkg{cli} package.
 }
 \examples{
 \dontrun{
@@ -41,7 +40,6 @@ gps <- read_gps_csv(pattern = "^Z001.*\\\\.csv$")
 # Or explicitly specify a directory
 gps <- read_gps_csv(pattern = "^Z001.*\\\\.csv$", dir = "/path/to/gps_data")
 
-dplyr::glimpse(gps)
 }
 
 }

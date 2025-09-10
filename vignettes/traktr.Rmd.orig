@@ -92,13 +92,13 @@ gps_data_Z313 <- gps_data |>
   filter(subject=="Z313")
 
 gps_data_Z313 <- gps_data_Z313 |>
-  mutate_aoi_h3(lat = "lat", lon = "lon") |>
+  mutate_aoi_h3() |>
   fetch_ndvi(
     from = min(gps_data_Z313$timestamp),
     to   = max(gps_data_Z313$timestamp),
     out_dir = "output/.ndvi",
     client = oauth,
-    res_m = 10
+    resolution_m = 10
   ) |>
   attach_ndvi() |>
   fetch_landuse(out_dir = "output/.landuse") |>
@@ -107,87 +107,62 @@ gps_data_Z313 <- gps_data_Z313 |>
 
 💡 NDVI values range from 0 (bare ground) to 1 (lush green vegetation).
 
-### Step 4. Visualize results
+### Step 4. Process multiple participants at once
+
+For processing multiple subjects at once, simply use `purrr::map()` to process subjects individually. 
+
+```{r eval=FALSE}
+gps_data_rich <- gps_data |>
+  group_split(subject) |>
+  
+  # Subject specific 
+  purrr::map(function(df_subj) {
+    cli::cli_alert_info("→ Subject {.strong {first(df_subj$subject)}}")
+    df_subj |>
+      mutate_aoi_h3() |>
+      fetch_ndvi(
+        from = min(df_subj$timestamp),
+        to   = max(df_subj$timestamp),
+        out_dir = file.path("output/.ndvi_individual", unique(df_subj$subject)),
+        client = oauth,
+        resolution_m = 10
+      ) |>
+      attach_ndvi() |>
+      fetch_landuse(out_dir = "output/.worldcover_individual") |>
+      attach_landuse()
+  }) |>
+  dplyr::bind_rows()
+```
+
+### Step 5. Visualize results
 
 #### Simple NDVI map
 
 ```{r eval=FALSE}
 library(ggplot2)
+library(dplyr)
 
-ggplot(gps_data_Z313 |> select(h3, ndvi_mean, geometry) |> unique(),
-       aes(fill = ndvi_mean)) +
-  geom_sf(color = NA) +
-  scale_fill_gradient2(
-    midpoint = 0.5,
-    low = "brown",
-    mid = "#E7D6A4",
-    high = "darkgreen",
-    limits = c(0,1)
-  )+
-  labs(fill = "NDVI")+
-  # remove coordinates for pricavy
-  theme_void()
+gps_data_Z313 |> 
+  select(h3, ndvi_mean, geometry) |>
+  unique() |>
+  ggplot(aes(fill = ndvi_mean)) +
+    geom_sf(color = NA) +
+    scale_fill_gradient2(
+      midpoint = 0.5,
+      low = "brown",
+      mid = "#E7D6A4",
+      high = "darkgreen",
+      limits = c(0,1)
+    ) +
+    labs(fill = "NDVI")+
+    # remove coordinates for pricavy
+    theme_void()
 ```
 
 
 #### Adding OpenStreetMap context
 
 With `cartographr`, you can overlay NDVI values on top of OSM basemaps:
-
-### Read GPS data files
-
-You can use `read_gps_csv()` to automatically read in all `*.csv` files. The function will look for 
-files in your `GPS_SMB_ROOT` directory. 
-
-```{r eval=FALSE}
-gps_data <- read_gps_csv(pattern = "^Z.*\\.csv$") |> 
-  dplyr::select(subject, timestamp, lat, lon, direction, speed)
-```
-
-### Fetch data from CDSE
-
-After that, we can simply retrieve the NDVI and landuse data from the CDSE/AWS servers for participant Z313.
-
-```{r eval=FALSE}
-gps_data_Z313 <- gps_data |> 
-  filter(subject=="Z313")
-
-gps_data_Z313 <- gps_data_Z313 |>
-  mutate_aoi_h3(lat = "lat", lon = "lon") |>
-  fetch_ndvi(
-    from = min(gps_data_Z313$timestamp),
-    to   = max(gps_data_Z313$timestamp),
-    out_dir = "output/.ndvi",
-    client = oauth,
-    res_m = 10
-  ) |>
-  attach_ndvi() |>
-  fetch_landuse(out_dir = "output/.landuse") |>
-  attach_landuse()
-```
-
-### Simple visualization
-
-```{r eval=FALSE}
-library(ggplot2)
-
-ggplot(gps_data_Z313 |> select(h3, ndvi_mean, geometry) |> unique(),
-       aes(fill = ndvi_mean)) +
-  geom_sf(color = NA) +
-  scale_fill_gradient2(
-    midpoint = 0.5,
-    low = "brown",
-    mid = "#E7D6A4",
-    high = "darkgreen",
-    limits = c(0,1)
-  )+
-  labs(fill = "NDVI")+
-  # remove coordinates for pricavy
-  theme_void()
-```
-
-
-#### Visualization with `cartographr`
 
 ```{r eval=FALSE}
 library(cartographr)
@@ -205,7 +180,7 @@ pm <- p +
   ggnewscale::new_scale_fill() +
   geom_sf(
     data = gps_data_Z313 |> 
-      dplyr::select(geometry, ndvi_mean, frac_green_core, h3) |> 
+      select(geometry, ndvi_mean, frac_green_core, h3) |> 
       unique(),
     aes(fill = ndvi_mean),
     color = NA, alpha = 0.6

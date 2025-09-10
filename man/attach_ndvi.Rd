@@ -2,65 +2,74 @@
 % Please edit documentation in R/attach_ndvi.R
 \name{attach_ndvi}
 \alias{attach_ndvi}
-\title{Attach NDVI summaries back to the input data frame}
+\title{Attach NDVI statistics to an AOI}
 \usage{
-attach_ndvi(df, out_dir, summary = "mean", drop_geometry = FALSE)
+attach_ndvi(
+  df,
+  out_dir = NULL,
+  deduplicate = TRUE,
+  crs_planar = 3857,
+  prefix = "ndvi_",
+  progress = TRUE
+)
 }
 \arguments{
-\item{df}{A data frame of GPS or other observations that already has an AOI id
-column (e.g. created via \code{\link[=mutate_aoi_h3]{mutate_aoi_h3()}} or \code{\link[=mutate_aoi_buffer]{mutate_aoi_buffer()}}) and
-AOI metadata in \code{attr(df, "traktr_aoi")} and \code{attr(df, "traktr_aoi_params")}.}
+\item{df}{A data object carrying the AOI (produced by \code{mutate_aoi_*()}).
+Must contain an AOI identifier column and have an attached AOI geometry.}
 
-\item{out_dir}{Directory containing previously fetched NDVI chip \code{.tif} files
-(as created by \code{\link[=fetch_ndvi]{fetch_ndvi()}}).}
+\item{out_dir}{Directory where NDVI GeoTIFF files are located. Used if
+no recorded tiles are found in \code{attr(df, "ndvi_aoi")}.}
 
-\item{summary}{Summary function to apply in \pkg{exactextractr}
-(e.g. \code{"mean"}, \code{"median"}, \code{"stdev"}). Default \code{"mean"}.}
+\item{deduplicate}{Logical. If \code{TRUE} (default), AOIs with identical
+geometry are extracted only once, then mapped back.}
 
-\item{drop_geometry}{Logical; if \code{TRUE}, the AOI geometry column is
-dropped after joining. If \code{FALSE} (default), an \code{sf} object is returned with geometries
-retained.}
+\item{crs_planar}{EPSG code of the projected CRS used to compute surface
+areas in meters. Defaults to Web Mercator (EPSG:3857).}
+
+\item{prefix}{Prefix for output column names. Default is \code{"ndvi_"}.}
+
+\item{progress}{Logical. If \code{TRUE} (default), show progress messages
+during extraction.}
 }
 \value{
-A data frame (class \code{"ndvi_df"}) with an additional NDVI summary column.
-If \code{drop_geometry = FALSE}, the result is an \code{sf} object with geometries.
+The input \code{df}, augmented with NDVI summary columns.
 }
 \description{
-Reads fetched NDVI chip files (GeoTIFFs), mosaics them into a virtual raster,
-extracts NDVI statistics per AOI (from \code{attr(df, "traktr_aoi")}), and joins the
-results back to the input tibble.
+Extracts NDVI values from GeoTIFF chips covering an AOI, computes
+area-weighted summary statistics (mean, sd, min, max, median), and joins
+them back to the input data. All statistics are weighted by covered surface
+area in square meters, ensuring comparability across latitudes and AOI sizes.
 }
 \details{
-The function:
-\enumerate{
-\item Collects NDVI chip files either from \code{attr(df,"ndvi_aoi")} or by
-listing \code{out_dir}.
-\item Builds a lazy mosaic (VRT) using \pkg{terra}.
-\item Reprojects the AOIs to match the raster CRS.
-\item Uses \pkg{exactextractr::exact_extract()} to compute per-AOI summaries
-on the first band (NDVI), ignoring masked areas.
-\item Joins the summary values back into \code{df} by the AOI id column
-(\code{attr(df,"ndvi_aoi_params")$id_col}).
+\itemize{
+\item AOI handling: The AOI is validated and transformed to \code{crs_planar}
+to ensure that surface area is measured in square meters.
+\item Summaries: Each NDVI value is weighted by its overlap area (m²) when
+computing the statistics.
+\item Output: Five new columns are created per AOI:
+\code{ndvi_mean}, \code{ndvi_sd}, \code{ndvi_min}, \code{ndvi_max},
+\code{ndvi_median}.
+}
+}
+\section{Attributes}{
+
+Attributes of \code{df} are preserved. AOI and fetch metadata (e.g.,
+\code{attr(df, "traktr_aoi")}, \code{attr(df, "ndvi_aoi")}) remain available.
 }
 
-For H3-based AOIs, duplicate geometries are deduplicated before extraction.
-
-The created NDVI column is named \verb{ndvi_<summary>} (e.g. \code{ndvi_mean}).
-}
 \examples{
 \dontrun{
-gps <- tibble::tibble(lat = c(47.38, 47.39), lon = c(8.53, 8.54))
-df <- gps |>
-  mutate_aoi_h3(lat, lon, res = 10) |>
-  fetch_ndvi(from = as.Date("2025-04-01"),
-             to   = as.Date("2025-07-31"),
-             out_dir = "output/ndvi") |>
-  attach_ndvi(out_dir = "output/ndvi", summary = "mean")
+df <- mutate_aoi_h3(my_points, res = 10)
+df <- fetch_ndvi(df, out_dir = "data/ndvi", from = Sys.Date()-30, to = Sys.Date())
+df <- attach_ndvi(df, out_dir = "data/ndvi", crs_planar = 3857)
 
-head(df$ndvi_mean)
+# Inspect statistics
+head(df[, c("h3", "ndvi_mean", "ndvi_sd")])
 }
 
 }
 \seealso{
-\code{\link[=mutate_aoi_h3]{mutate_aoi_h3()}}, \code{\link[=mutate_aoi_buffer]{mutate_aoi_buffer()}}, \code{\link[=fetch_ndvi]{fetch_ndvi()}}
+\code{\link{attach_landuse}},
+\code{\link{mutate_aoi_h3}}, \code{\link{mutate_aoi_buffer}},
+\code{\link{fetch_ndvi}}
 }

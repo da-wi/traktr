@@ -2,103 +2,118 @@
 % Please edit documentation in R/fetch_ndvi.R
 \name{fetch_ndvi}
 \alias{fetch_ndvi}
-\title{Fetch NDVI chips for an AOI}
+\title{Fetch NDVI chips from CDSE over an AOI}
 \usage{
 fetch_ndvi(
   df,
+  out_dir,
   from,
   to,
-  out_dir,
-  res_m = 10,
-  max_px = 2500,
-  overlap_px = 0,
-  evalscript = ndvi_evalscript_path(),
+  resolution_m = 10,
+  tile_max_px = 2500,
+  tile_overlap_px = 0,
   client,
-  rate_n = 2,
-  rate_period = 1,
-  overwrite = FALSE
+  evalscript = .ndvi_evalscript_path(),
+  rate = ratelimitr::rate(n = 2, period = 1),
+  overwrite = FALSE,
+  progress = TRUE,
+  aoi = NULL,
+  res_m = NULL,
+  max_px = NULL,
+  overlap_px = NULL,
+  rate_n = NULL,
+  rate_period = NULL
 )
 }
 \arguments{
-\item{df}{A data frame previously passed through \code{\link[=mutate_aoi_h3]{mutate_aoi_h3()}} or
-\code{\link[=mutate_aoi_buffer]{mutate_aoi_buffer()}}, i.e. with an AOI stored in \code{attr(df,"ndvi_aoi")}.}
+\item{df}{A data object carrying the AOI. If \code{aoi} is not supplied,
+the function reads \code{attr(df, "traktr_aoi")}. The AOI must be an
+\code{sf} polygon/multipolygon with a valid CRS.}
 
-\item{from, to}{Date range for Sentinel-2 search (inclusive). Must be coercible
-to \code{Date}.}
+\item{out_dir}{Directory where output GeoTIFF files are written. Will be
+created if it does not exist.}
 
-\item{out_dir}{Directory to which NDVI GeoTIFF chips will be written.}
+\item{from, to}{Date range (inclusive) used to query NDVI imagery. Coerced
+with \code{as.Date()}.}
 
-\item{res_m}{Numeric ground resolution in meters per pixel (default \code{20}).
-This is passed both to tile generation and to CDSE \code{resolution}.}
+\item{resolution_m}{Target pixel size in meters used when requesting chips.}
 
-\item{max_px}{Maximum allowed pixel width/height per request (default \code{2500}).
-Used when splitting AOIs into tiles.}
+\item{tile_max_px}{Maximum tile width/height in pixels used by the tiler.
+Controls chip size and request count.}
 
-\item{overlap_px}{Overlap (in pixels) to add around each tile (default \code{0}).}
+\item{tile_overlap_px}{Optional overlap between adjacent tiles in pixels.}
 
-\item{evalscript}{Path to SentinelHub evalscript file.}
+\item{client}{OAuth client for CDSE. Typically an \code{httr2} OAuth client
+or equivalent object.}
 
-\item{client}{OAuth client object for CDSE, e.g. from
-\code{CDSE::GetOAuthClient(id=..., secret=...)}.}
+\item{evalscript}{Path or character string containing the Sentinel Hub
+evalscript to compute NDVI.}
 
-\item{rate_n, rate_period}{Passed to \pkg{ratelimitr} to throttle requests
-(default 2 requests per second).}
+\item{rate}{A \code{ratelimitr::rate()} object controlling request rate,
+e.g. \code{ratelimitr::rate(n = 2, period = 1)}.}
 
-\item{overwrite}{Logical; if \code{FALSE} (default), existing \code{.tif} files in
-\code{out_dir} are skipped. If \code{TRUE}, files are re-fetched.}
+\item{overwrite}{Logical. If \code{FALSE} (default), existing files are
+skipped. If \code{TRUE}, files are re-downloaded.}
+
+\item{progress}{Logical. If \code{TRUE} (default), show progress messages
+and a progress bar.}
+
+\item{aoi}{Optional \code{sf} polygon/multipolygon. If supplied, overrides
+\code{attr(df, "traktr_aoi")}.}
+
+\item{res_m}{Deprecated. Use \code{resolution_m}.}
+
+\item{max_px}{Deprecated. Use \code{tile_max_px}.}
+
+\item{overlap_px}{Deprecated. Use \code{tile_overlap_px}.}
+
+\item{rate_n, rate_period}{Deprecated. Use \code{rate = ratelimitr::rate(n, period)}.}
 }
 \value{
-The input \code{df}, with additional attributes:
-\itemize{
-\item \code{ndvi_tiles} - an \code{sf} object of tiles with download status and file paths.
-\item \code{ndvi_fetch_params} - list of parameters used.
-}
+The input \code{df}, returned invisibly, augmented with attributes
+describing outputs and call parameters (see Details).
 }
 \description{
-Splits the AOI from \code{df} (in \code{attr(df,"ndvi_aoi")}) into request tiles,
-downloads Sentinel-2 NDVI chips from the Copernicus Data Space Ecosystem (CDSE),
-and stores a tile index as \code{attr(df,"ndvi_tiles")}. A record of fetch parameters
-is stored in \code{attr(df,"ndvi_fetch_params")}.
+Tiles an area of interest (AOI) into WGS84 chips at a target resolution,
+then downloads NDVI GeoTIFFs from the Copernicus Data Space Ecosystem (CDSE)
+using a provided evalscript. The function is rate-limited, honors local
+caching, and records output metadata on the input object.
 }
 \details{
-This function is AOI-agnostic: it works for H3-derived AOIs
-(via \code{\link[=mutate_aoi_h3]{mutate_aoi_h3()}}) or buffer-based AOIs (via \code{\link[=mutate_aoi_buffer]{mutate_aoi_buffer()}}).
-
-The function:
-\enumerate{
-\item Creates request tiles on the AOI.
-\item Iterates through each tile and fetches the satellite data.
-\item Applies a rate limit to avoid hitting API caps.
-\item Builds an \code{sf} index of all tiles with columns:
-\code{tile_id}, \code{geometry}, \code{file}, \code{status}, \code{msg}.
+\itemize{
+\item AOI handling: The AOI is validated, transformed to EPSG:4326, and used to
+build request chips. If the AOI has no CRS, the call aborts.
+\item Caching: Filenames encode the chip bounding box (xmin, ymin, xmax, ymax)
+and the date range, which provides a stable cache key across runs.
+\item Rate limiting: All remote requests are wrapped with \code{ratelimitr}.
+\item Attributes:
+\itemize{
+\item \code{attr(df, "ndvi_aoi")} stores an \code{sf} index of chips with
+status and file paths.
+\item \code{attr(df, "ndvi_fetch_params")} stores call parameters.
+\item \code{attr(df, "traktr_layers")$ndvi} stores the same information in a
+harmonized container for downstream discovery.
 }
-
-The tile index is attached as \code{attr(df,"ndvi_tiles")}.
-Parameters used are stored as a list in \code{attr(df,"ndvi_fetch_params")}.
-
-Progress is displayed using \pkg{cli}.
+}
 }
 \examples{
 \dontrun{
-df <- tibble::tibble(lat = c(47.38,47.39), lon = c(8.53,8.54)) |>
-  mutate_aoi_h3(lat, lon, res = 10)
-
-oauth <- CDSE::GetOAuthClient(
-  id     = Sys.getenv("CDSE_CLIENT_ID"),
-  secret = Sys.getenv("CDSE_CLIENT_SECRET")
+df <- some_traktr_object_with_aoi()
+df <- fetch_ndvi(
+  df,
+  out_dir       = "data/ndvi",
+  from          = as.Date("2024-06-01"),
+  to            = as.Date("2024-06-30"),
+  client        = my_cdse_client,
+  resolution_m  = 10,
+  overwrite     = FALSE,
+  progress      = TRUE
 )
-
-df <- fetch_ndvi(df,
-                 from = as.Date("2025-04-01"),
-                 to   = as.Date("2025-04-30"),
-                 out_dir = "output/ndvi",
-                 res_m   = 20,
-                 client  = oauth)
-
-attr(df, "ndvi_tiles")
+# Inspect chip index
+attr(df, "traktr_layers")$ndvi$index
 }
 
 }
 \seealso{
-\code{\link[=mutate_aoi_h3]{mutate_aoi_h3()}}, \code{\link[=mutate_aoi_buffer]{mutate_aoi_buffer()}}, \code{\link[=attach_ndvi]{attach_ndvi()}},
+\code{\link{fetch_landuse}}, \code{ratelimitr::rate}
 }

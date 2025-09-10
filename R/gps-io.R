@@ -17,8 +17,7 @@
 #' If both `dir` and the `GPS_SMB_ROOT` environment variable are missing or empty,
 #' the function will abort with an informative error.
 #'
-#' Progress is displayed using the \pkg{cli} package. Files are read with
-#' [readr::read_csv()] using `show_col_types = FALSE`.
+#' Progress is displayed using the \pkg{cli} package.
 #'
 #' @return A tibble with one row per GPS observation. Includes at least the columns
 #' `subject`, `timestamp`, `lat`, and (if present) `lon`. Additional columns are preserved.
@@ -31,12 +30,11 @@
 #' # Or explicitly specify a directory
 #' gps <- read_gps_csv(pattern = "^Z001.*\\.csv$", dir = "/path/to/gps_data")
 #'
-#' dplyr::glimpse(gps)
 #' }
 #'
 #' @export
 read_gps_csv <- function(pattern, dir = NULL) {
-  rlang::check_installed(c("readr", "dplyr", "cli", "tibble"))
+  rlang::check_installed(c("cli", "tibble"))
   
   root_env <- Sys.getenv("GPS_SMB_ROOT", "")
   src_dir <- if (!is.null(dir)) {
@@ -104,14 +102,34 @@ read_gps_csv <- function(pattern, dir = NULL) {
     }
     
     # Move 'subject' before 'id' without bare symbols
+    # if ("id" %in% names(res)) {
+    #   res <- dplyr::relocate(res, dplyr::all_of("subject"),
+    #                          .before = dplyr::all_of("id"))
+    # } else {
+    #   res <- dplyr::relocate(res, dplyr::all_of("subject"))
+    # }
+    # 
+    # result <- dplyr::bind_rows(result, res)
+    # Relocate "subject"
     if ("id" %in% names(res)) {
-      res <- dplyr::relocate(res, dplyr::all_of("subject"),
-                             .before = dplyr::all_of("id"))
+      # Move "subject" before "id"
+      id_pos <- match("id", names(res))
+      before_cols <- names(res)[seq_len(id_pos - 1)]
+      after_cols  <- names(res)[-(seq_len(id_pos - 1))]
+      after_cols  <- setdiff(after_cols, "subject")
+      res <- res[, c(before_cols, "subject", after_cols), drop = FALSE]
     } else {
-      res <- dplyr::relocate(res, dplyr::all_of("subject"))
+      # Move "subject" to the front
+      res <- res[, c("subject", setdiff(names(res), "subject")), drop = FALSE]
     }
     
-    result <- dplyr::bind_rows(result, res)
+    # Bind to result
+    if (!exists("result")) {
+      result <- res
+    } else {
+      result <- rbind(result, res)
+      rownames(result) <- NULL
+    }
     cli::cli_progress_update(id = pb, inc = 1)
     
   }

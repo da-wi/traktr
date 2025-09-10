@@ -12,9 +12,13 @@ old/
 analysis.R
 docs/
 data/
+inst/ext/my_data.csv
 .data
 
 .RDataTmp
+
+calculate_stops.R
+greenness_exposure.R
 
 ^pkgdown$
 ^\.covrignore$
