@@ -1,0 +1,18 @@
+<urlset xmlns = 'http://www.sitemaps.org/schemas/sitemap/0.9'>
+<url><loc>https://github.com/da-wi/traktr/404.html</loc></url>
+<url><loc>https://github.com/da-wi/traktr/articles/Greenness_Exposure.html</loc></url>
+<url><loc>https://github.com/da-wi/traktr/articles/index.html</loc></url>
+<url><loc>https://github.com/da-wi/traktr/articles/traktr.html</loc></url>
+<url><loc>https://github.com/da-wi/traktr/authors.html</loc></url>
+<url><loc>https://github.com/da-wi/traktr/index.html</loc></url>
+<url><loc>https://github.com/da-wi/traktr/reference/attach_landuse.html</loc></url>
+<url><loc>https://github.com/da-wi/traktr/reference/attach_ndvi.html</loc></url>
+<url><loc>https://github.com/da-wi/traktr/reference/fetch_landuse.html</loc></url>
+<url><loc>https://github.com/da-wi/traktr/reference/fetch_ndvi.html</loc></url>
+<url><loc>https://github.com/da-wi/traktr/reference/index.html</loc></url>
+<url><loc>https://github.com/da-wi/traktr/reference/mutate_aoi_buffer.html</loc></url>
+<url><loc>https://github.com/da-wi/traktr/reference/mutate_aoi_h3.html</loc></url>
+<url><loc>https://github.com/da-wi/traktr/reference/read_gps_csv.html</loc></url>
+<url><loc>https://github.com/da-wi/traktr/reference/summarize_exposure.html</loc></url>
+</urlset>
+

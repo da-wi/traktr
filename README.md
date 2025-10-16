@@ -32,22 +32,47 @@ generates buffers around GPS coordinates.
 ``` r
 library(traktr)
 library(dplyr)
+library(sf)
 
 # Demo points
-gps <- tibble::tibble(
-  subject = c("Z001","Z001","Z002"),
-  timestamp = as.POSIXct(c("2025-06-01 08:10","2025-06-01 12:05","2025-06-02 09:30")),
-  lat = c(47.38, 47.39, 47.385),
-  lon = c(8.53, 8.54, 8.545)
+gps <- tibble(
+  subject = rep("Z001", 6),
+  timestamp = as.POSIXct(c(
+    "2025-06-01 08:00",
+    "2025-06-01 08:05",
+    "2025-06-01 08:10",
+    "2025-06-01 08:15",
+    "2025-06-01 08:20",
+    "2025-06-01 08:25"
+  )),
+  lat = c(
+    47.37679857987844,
+    47.3739359784768,
+    47.37233750399134,
+    47.37044833531484,
+    47.36863176315391,
+    47.36720934345714
+  ),
+  lon = c(
+    8.539868485211397,
+    8.538366448157388,
+    8.53830207514079,
+    8.539053093667793,
+    8.539739739178195,
+    8.544508706822644
+  )
 )
 
 hex <- gps |> 
-  mutate_aoi_h3(res = 9) |> 
+  mutate_aoi_h3(res=9) |> 
   fetch_ndvi(from = as.Date("2025-04-01"),
            to = as.Date("2025-07-31"),
-           out_dir = "data/.ndvi",
-           client = oauth, res_m = 10) |>
-  attach_ndvi()
+           out_dir = "~/.ndvi",
+           client = oauth, 
+           resolution_m = 8) |>
+  attach_ndvi() |>
+  mutate(geometry = h3jsr::cell_to_polygon(h3)) |> 
+  sf::st_as_sf(sf_column_name = "geometry", crs = 4326)
 
 
 ggplot(hex, aes(fill = ndvi_mean))+
@@ -59,7 +84,8 @@ ggplot(hex, aes(fill = ndvi_mean))+
     midpoint = 0.5,
     limits = c(0,1)
   )+
-  labs(fill = "NDVI")
+  labs(fill = "NDVI")+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
 ```
 
 ![](man/figures/README-plot01.png)

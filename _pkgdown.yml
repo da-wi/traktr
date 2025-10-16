@@ -1,6 +1,7 @@
 template:
   bootstrap: 5
   light-switch: true
+  math-rendering: mathjax
 
 # Optional but nice to have
 url: https://github.com/da-wi/traktr
@@ -40,9 +41,15 @@ reference:
       - fetch_ndvi
       - fetch_landuse
 
-  - title: "Attach & aggregate exposures"
+  - title: "Attach context layers"
     desc: >
       Compute ready-to-model features. 
     contents:
       - attach_ndvi
       - attach_landuse
+
+  - title: "Summarize exposures"
+    desc: >
+      Aggregate exposures per group
+    contents:
+      - summarize_exposure

@@ -1,0 +1,423 @@
+---
+title: "Greenness Exposure: A Walkthrough"
+output:
+  rmarkdown::html_document:
+    self_contained: true
+    keep_md: true
+vignette: >
+  %\VignetteIndexEntry{Greenness Exposure: A Walkthrough}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+  
+
+
+**Goal.** Compute daytime, time-weighted greenness exposure from GPS tracks, with defensible handling of gaps, optional NDVI/land-use enrichment, and validation plots.
+This vignette walks through a robust pipeline that:
+
+1. Derives interval-level dwell time from successive GPS fixes.
+2. Classifies gaps (normal vs. stationary "standby" vs. long/uncertain) and applies a strategy (exclude or capped carry-forward).
+3. Restricts attribution to a local daytime window (here: 07:00–22:00, Europe/Zurich).
+4. Computes time-weighted exposure to ndvi_mean and land-use fractions.
+5. Summarises to per-subject, per-day metrics (weighted means/SDs) and contrasts them with unweighted (unique-tile) statistics.
+6. Provides diagnostics and an optional map of time spent by H3 cell.
+
+**Data prerequisites.** A data frame gps_data with one row per GPS fix and at least: subject, timestamp (POSIXct, UTC), lat, lon. For exposure, you’ll also need h3 (H3 index per fix) and environmental attributes (ndvi_mean, frac_green_core, frac_grey). If you don’t have them yet, see the Enrichment section.
+
+
+### Step 1. Setup
+
+
+### Step 2. Parameters
+
+``` r
+# Sampling & gap logic
+nominal_fix_sec <- 10 # intended sampling interval (s)
+delta_t_sec <- 3 * 60 # standby gap threshold (>= 3 min)
+delta_d_m <- 150 # distance threshold for "no movement" during a gap (m)
+gap_big_sec <- 15 * 60 # "big" gap threshold (s)
+gap_strategy <- "exclude" # {"exclude", "carry_forward"}
+cap_carry_forward <- 5 * 60 # cap when carrying forward (s)
+
+
+# Daytime window (local time)
+tz_local <- "Europe/Zurich"
+day_start_hr <- 7
+day_end_hr <- 22 # [start, end)
+```
+
+### Step 3. Daytime-overlap helper
+
+Efficiently compute seconds of overlap between each interval [s, e) and the union of daily daytime windows.
+
+
+``` r
+fast_day_overlap <- function(s, e, tz = "Europe/Zurich", day_start_hr = 7, day_end_hr = 22) {
+stopifnot(inherits(s, "POSIXct"), inherits(e, "POSIXct"))
+
+
+s_loc <- lubridate::with_tz(s, tz)
+e_loc <- lubridate::with_tz(e, tz)
+
+
+valid <- !is.na(s_loc) & !is.na(e_loc) & (e_loc > s_loc)
+out <- numeric(length(s))
+if (!any(valid)) return(out)
+
+
+s_loc <- s_loc[valid]; e_loc <- e_loc[valid]
+sd <- lubridate::floor_date(s_loc, "day")
+ed <- lubridate::floor_date(e_loc, "day")
+same_day <- sd == ed
+
+
+to_num <- function(x) as.numeric(x)
+
+
+f_start <- pmax(to_num(s_loc), to_num(sd + lubridate::hours(day_start_hr)))
+f_end <- pmin(to_num(e_loc), to_num(sd + lubridate::hours(day_end_hr)))
+first <- pmax(f_end - f_start, 0)
+
+
+l_start <- pmax(to_num(ed + lubridate::hours(day_start_hr)), to_num(s_loc))
+l_end <- pmin(to_num(e_loc), to_num(ed + lubridate::hours(day_end_hr)))
+last <- pmax(l_end - l_start, 0)
+last[same_day] <- 0
+
+
+n_days <- as.integer(difftime(ed, sd, units = "days"))
+mid_days <- pmax(n_days - 1L, 0L)
+window_len <- (day_end_hr - day_start_hr) * 3600
+mid <- mid_days * window_len
+
+
+res <- first + last + mid
+out[valid] <- res
+out
+}
+```
+
+### Step 4. Interval metrics and gap handling
+
+
+``` r
+# Distance function (geodist preferred for speed/accuracy)
+.Geodesic <- function(lon1, lat1, lon2, lat2) {
+  if (requireNamespace("geodist", quietly = TRUE)) {
+    geodist::geodist_vec(lon1, lat1, lon2, lat2, paired = TRUE, measure = "geodesic")
+  } else {
+    # Fallback: simple Haversine via base math (approximate)
+    rad <- pi/180
+    R <- 6371000
+    dlon <- (lon2 - lon1) * rad
+    dlat <- (lat2 - lat1) * rad
+    a <- sin(dlat/2)^2 + cos(lat1 * rad) * cos(lat2 * rad) * sin(dlon/2)^2
+    2 * R * atan2(sqrt(a), sqrt(1 - a))
+  }
+}
+
+
+gps_expo <- gps_data |>
+  arrange(subject, timestamp) |>
+  group_by(subject) |>
+  mutate(
+  next_time = dplyr::lead(timestamp),
+  next_lat = dplyr::lead(lat),
+  next_lon = dplyr::lead(lon),
+  dt_sec = as.numeric(difftime(next_time, timestamp, units = "secs")),
+  dist_m = .Geodesic(lon, lat, next_lon, next_lat),
+  
+  
+  # Classify interval [timestamp, next_time)
+  is_gap = dt_sec > nominal_fix_sec,
+  standby_gap = is_gap & dt_sec >= delta_t_sec & dist_m <= delta_d_m,
+  big_uncertain = is_gap & (dist_m > delta_d_m | dt_sec >= gap_big_sec)
+  ) |>
+  mutate(
+  dwell_eff_sec = dplyr::case_when(
+  big_uncertain & gap_strategy == "exclude" ~ NA_real_,
+  big_uncertain & gap_strategy == "carry_forward" ~ pmin(dt_sec, cap_carry_forward),
+  TRUE ~ dt_sec
+  )
+  ) |>
+  mutate(
+  daytime_overlap_sec = fast_day_overlap(timestamp, next_time, tz = tz_local,
+  day_start_hr = day_start_hr, day_end_hr = day_end_hr),
+  day_dwell_sec = pmin(daytime_overlap_sec, dwell_eff_sec)
+  ) |>
+  ungroup() |>
+  # Keep intervals that intersect daytime (including those we mark missing for exposure)
+  filter(day_dwell_sec > 0 | (!is.na(day_dwell_sec) & daytime_overlap_sec > 0))
+```
+
+Why keep intervals with daytime_overlap_sec > 0 but day_dwell_sec = NA? They still contribute to missing daytime coverage, which we quantify later.
+
+### Step 5. (optional) Enrichment: NDVI & land-use
+
+
+``` r
+oauth <- getOption("ndvi_oauth", NULL) # or your own client config
+
+
+gps_expo_rich <- gps_expo |>
+  group_split(subject) |>
+  purrr::map(function(df_subj) {
+  if (requireNamespace("cli", quietly = TRUE)) cli::cli_alert_info("→ Subject {.strong {first(df_subj$subject)}}")
+    df_subj |>
+    mutate_aoi_h3() |>
+    fetch_ndvi(
+    from = min(df_subj$timestamp),
+    to = max(df_subj$timestamp),
+    out_dir = file.path(".data/ndvi", unique(df_subj$subject)),
+    client = oauth,
+    resolution_m = 10
+    ) |>
+    attach_ndvi() |>
+    fetch_landuse(out_dir = ".data/landuse") |>
+    attach_landuse()
+    }) |>
+  dplyr::bind_rows()
+} else {
+# Minimal path: assume gps_expo already has ndvi_mean and land-use fractions
+gps_expo_rich <- gps_expo
+}
+```
+
+### Step 6. Per-interval exposure contributions
+
+``` r
+gps_expo_rich <- gps_expo_rich |>
+  mutate(
+    expo_contrib_ndvi = ndvi_mean * day_dwell_sec,
+    expo_contrib_green = frac_green_core * day_dwell_sec,
+    expo_contrib_grey = frac_grey * day_dwell_sec,
+    missing_day_sec = ifelse(is.na(day_dwell_sec), daytime_overlap_sec, 0)
+  )
+```
+
+### Step 7. Daily aggregation (weighted and unweighted)
+
+Weighted means (time as frequency-like weight) and an unbiased weighted SD:
+
+
+``` r
+wtd_sd_unbiased <- function(x, w) {
+  ok <- is.finite(x) & is.finite(w) & (w > 0)
+  x <- x[ok]; w <- w[ok]
+  if (length(x) == 0L) return(NA_real_)
+  W <- sum(w)
+  if (W <= 0) return(NA_real_)
+  mu <- sum(w * x) / W
+  num <- sum(w * (x - mu)^2)
+  W2 <- sum(w^2)
+  denom <- W - (W2 / W) # unbiased for frequency-like weights
+  if (denom <= 0) return(NA_real_)
+  sqrt(num / denom)
+}
+```
+
+This section turns per-interval contributions into **per-subject (and typically per-day)** exposure metrics.
+
+**What is being averaged?**  
+For each interval *i* we already computed:
+- `day_dwell_sec_i` — seconds of valid daytime dwell,
+- `ndvi_mean_i`, `frac_green_core_i`, `frac_grey_i` — attributes for the interval’s H3 cell,
+- `expo_contrib_*_i = attribute_i × day_dwell_sec_i` — exposure *contribution* in “(attribute × seconds)”.
+
+**Time-weighted means.**  
+For any attribute \(x\) (e.g., NDVI), the time-weighted mean is the exposure contribution summed over intervals, divided by the total valid daytime seconds:
+\[
+\bar{x}_{\text{time-w}} = \frac{\sum_i x_i \cdot t_i}{\sum_i t_i}
+\quad \text{with } t_i = \text{day\_dwell\_sec}_i.
+\]
+Implementation-wise, this is exactly:
+- `ndvi_time_weighted  = sum(expo_contrib_ndvi)  / sum(day_dwell_sec)`
+- `green_time_weighted = sum(expo_contrib_green) / sum(day_dwell_sec)`
+- `grey_time_weighted  = sum(expo_contrib_grey)  / sum(day_dwell_sec)`
+
+**Unbiased weighted SD.**  
+`wtd_sd_unbiased(x, w)` computes a dispersion measure that treats `w` as **frequency-like** weights (seconds). It uses:
+\[
+s_w = \sqrt{\frac{\sum_i w_i (x_i - \bar{x}_w)^2}{\,\sum_i w_i - \frac{\sum_i w_i^2}{\sum_i w_i}\,}},
+\]
+which reduces the small-sample bias you get if you just divide by \(\sum w_i\). (If the denominator becomes non-positive—e.g., only one effective observation—it returns `NA`.)
+
+**Coverage and missingness.**  
+- `valid_day_sec = sum(day_dwell_sec)` is the total *usable* daytime seconds.
+- `missing_day_sec = sum(missing_day_sec)` is daytime that overlapped an interval but was excluded (e.g., “big/uncertain” gaps under your chosen strategy).
+- `coverage_valid_share = valid_day_sec / (valid_day_sec + missing_day_sec + 1e-9)` reports the **share of daytime covered by valid exposure**, with a tiny epsilon to avoid division by zero.
+
+**Why also compute unweighted (unique-tile) stats?**  
+Time-weighted metrics reflect **where time was actually spent**. But GPS sampling (and dwell) can overweight locations where people linger. To benchmark that, we also take **one record per unique H3 cell (per subject-day)** and compute simple means/SDs across those unique tiles:
+- This answers: "What’s the average environment across the set of places visited?" (equal weight per place),  
+  versus "What’s the average environment experienced over time?" (equal weight per second).
+
+Concretely, `tile_uniques` keeps distinct `(subject, date, h3, …)` rows and then takes plain means/SDs of `ndvi_mean`, `frac_green_core`, `frac_grey`.
+
+**Joining results.**  
+Finally, we join the time-weighted and unique-tile summaries so you can compare them side-by-side for each unit of analysis.
+
+
+``` r
+daily_weighted <- gps_expo_rich %>%
+  mutate(date = as_date(with_tz(timestamp, tz_local))) %>%
+  group_by(subject) %>%
+  # or use 
+  # group_by(subject, date) %>%
+  summarise(
+    ndvi_time_weighted  = sum(expo_contrib_ndvi,  na.rm = TRUE) / sum(day_dwell_sec, na.rm = TRUE),
+    green_time_weighted = sum(expo_contrib_green, na.rm = TRUE) / sum(day_dwell_sec, na.rm = TRUE),
+    grey_time_weighted  = sum(expo_contrib_grey,  na.rm = TRUE) / sum(day_dwell_sec, na.rm = TRUE),
+    
+    ndvi_sd_weighted    = wtd_sd_unbiased(ndvi_mean,       day_dwell_sec),
+    green_sd_weighted   = wtd_sd_unbiased(frac_green_core, day_dwell_sec),
+    grey_sd_weighted    = wtd_sd_unbiased(frac_grey,       day_dwell_sec),
+    
+    valid_day_sec        = sum(day_dwell_sec,   na.rm = TRUE),
+    missing_day_sec      = sum(missing_day_sec, na.rm = TRUE),
+    coverage_valid_share = valid_day_sec / (valid_day_sec + missing_day_sec + 1e-9),
+    .groups = "drop"
+  )
+
+# Step 2: Unweighted stats per subject-date using unique H3 tiles
+tile_uniques <- gps_expo_rich %>%
+  mutate(date = as_date(with_tz(timestamp, tz_local))) %>%
+  distinct(subject, date, h3, ndvi_mean, frac_green_core, frac_grey) %>%
+  group_by(subject) %>%
+  summarise(
+    ndvi_mean_unweighted   = mean(ndvi_mean,        na.rm = TRUE),
+    ndvi_sd_unweighted     = sd(ndvi_mean,          na.rm = TRUE),
+    green_mean_unweighted  = mean(frac_green_core,  na.rm = TRUE),
+    green_sd_unweighted    = sd(frac_green_core,    na.rm = TRUE),
+    grey_mean_unweighted   = mean(frac_grey,        na.rm = TRUE),
+    grey_sd_unweighted     = sd(frac_grey,          na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# Step 3: Join weighted and unweighted results
+expo_daily <- daily_weighted %>%
+  left_join(tile_uniques, by = c("subject"))
+
+expo_daily 
+```
+
+### Step 8. Comparing weighted vs. unweighted exposure metrics
+
+The following code explores how the **time-weighted** and **unweighted (unique-tile)** summaries differ.
+
+1. **Overall averages across subjects/days.**  
+   We first collapse `expo_daily` to a single row by taking the mean of each metric:
+   - `ndvi_time_weighted`, `green_time_weighted`, `grey_time_weighted`: mean exposures when weighted by time spent.  
+   - `ndvi_mean_unweighted`, `green_mean_unweighted`, `grey_mean_unweighted`: mean exposures when each visited H3 tile is counted equally.  
+
+   This gives a quick population-level comparison.
+
+2. **Distribution plots.**  
+   Using `pivot_longer()`, we reshape the data so the three indicators (NDVI, green, grey) can be plotted in a single `ggplot`.  
+   - First plot: distribution of *time-weighted* exposures across units.  
+   - Second plot: distribution of *unweighted* exposures across units.
+
+   These simple dot plots show the spread and relative levels of the indicators.
+
+3. **Scatterplots: weighted vs. unweighted.**  
+   We then compare metrics directly:
+   - NDVI: `geom_point(aes(x = ndvi_time_weighted, y = ndvi_mean_unweighted))`.  
+   - Green: `geom_point(aes(x = green_time_weighted, y = green_mean_unweighted))` with a regression line (`geom_smooth(method = "lm")`).  
+   - Grey: similar scatter of weighted vs. unweighted.  
+
+   These plots assess agreement: points close to the diagonal (x=y) indicate that weighting makes little difference. Systematic deviations show the effect of accounting for dwell time.
+
+   Axes are limited to `[0,1]` since the metrics are proportions or normalized indices.
+
+4. **Correlation diagnostics.**  
+   We compute correlations between weighted and unweighted versions of each metric (NDVI, green, grey).  
+   - For green, we also square the correlation (`^2`) to report \(R^2\), i.e. the variance explained by a linear fit.
+
+5. **Optional: mapping time across H3 cells.**  
+   To understand *where* time was spent, we aggregate total minutes per `(subject, date, h3)` tile:  
+   - `tile_minutes = sum(day_dwell_sec)/60` is the daytime duration.  
+   - `tile_ndvi` is the NDVI of that tile.  
+
+   We then convert H3 indices to polygons (`h3jsr::cell_to_polygon`) and plot them with `geom_sf(fill = tile_minutes)`.  
+   The resulting map shows spatial hotspots of time spent, i.e. the exposure “footprint” of the subject.
+
+---
+
+Together, these summaries allow you to:
+- Compare central tendencies of weighted vs. unweighted exposure.  
+- Inspect the degree of agreement (or bias) introduced by time-weighting.  
+- Visualize spatial distribution of time spent to support interpretation.
+
+
+``` r
+expo_daily |> 
+  summarize(ndvi_time_weighted = mean(ndvi_time_weighted),
+            green_time_weighted = mean(green_time_weighted),
+            grey_time_weighted = mean(grey_time_weighted))
+
+expo_daily |> 
+  summarize(ndvi_mean_unweighted = mean(ndvi_mean_unweighted),
+            green_mean_unweighted = mean(green_mean_unweighted),
+            grey_mean_unweighted = mean(grey_mean_unweighted))
+
+expo_daily |> 
+  tidyr::pivot_longer(cols = c("ndvi_time_weighted","green_time_weighted","grey_time_weighted")) |>
+  ggplot() + 
+  geom_point(aes(x=name, y= value))
+
+expo_daily |> tidyr::pivot_longer(cols = c("ndvi_mean_unweighted","green_mean_unweighted","grey_mean_unweighted")) |>
+  ggplot() + 
+  geom_point(aes(x=name, y= value))
+
+expo_daily |>
+  ggplot() +
+  geom_point(aes(x=ndvi_time_weighted,ndvi_mean_unweighted ))+
+  xlim(0,1)+ylim(0,1)
+
+expo_daily |>
+  ggplot(aes(x=green_time_weighted,green_mean_unweighted )) +
+  geom_point()+
+  xlim(0,1)+ylim(0,1)+
+  labs(y= "prop. green unweighted", x = "prop. green time-weighted")+
+  geom_smooth(method= "lm")+
+  hrbrthemes::theme_ipsum()
+
+cor(expo_daily$green_mean_unweighted, expo_daily$green_time_weighted)^2
+
+
+expo_daily |>
+  ggplot() +
+  geom_point(aes(x=grey_time_weighted,grey_mean_unweighted ))+
+  xlim(0,1)+ylim(0,1)
+
+
+
+cor(expo_daily$ndvi_mean_unweighted, expo_daily$ndvi_time_weighted)
+cor(expo_daily$green_mean_unweighted, expo_daily$green_time_weighted)
+cor(expo_daily$grey_mean_unweighted, expo_daily$grey_time_weighted)
+
+
+# Optional: how time is distributed across H3 tiles during daytime
+tile_time_daily <- gps_expo %>%
+  mutate(date = as_date(with_tz(timestamp, tz_local))) %>%
+  group_by(subject, date, h3) %>%
+  summarise(
+    tile_minutes = sum(day_dwell_sec, na.rm = TRUE) / 60,
+    tile_ndvi    = first(ndvi_mean),
+    .groups = "drop"
+  )
+
+ggplot(tile_time_daily |> mutate(geometry = h3jsr::cell_to_polygon(h3))) + geom_sf(aes(fill = tile_minutes, geometry = geometry))
+```
+
+### Summary 
+
+In this walkthrough, we developed a complete pipeline to compute **daytime, time-weighted greenness exposure** from raw GPS tracks. Along the way, we:
+
+- Derived dwell times from successive GPS fixes and applied rules to classify and handle gaps in a defensible way.  
+- Restricted analysis to a local daytime window, ensuring ecological validity of exposure measures.  
+- Integrated NDVI and land-use data.  
+- Calculated time-weighted exposure metrics and contrasted them with unweighted, unique-tile summaries.  
+- Produced diagnostic statistics and visualizations to validate the results and explore spatial distributions.  
+
+This workflow provides a transparent, reproducible framework for linking mobility data with environmental attributes. It enables both **per-subject, per-day exposure summaries** and deeper explorations of how measurement choices (e.g., gap handling, weighting, enrichment) influence exposure estimates. 
