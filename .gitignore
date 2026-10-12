@@ -2,6 +2,7 @@
 .RData
 .Ruserdata
 .Renviron
+.claude
 
 output/
 ^cache$
@@ -44,3 +45,6 @@ greenness_exposure.R
 ^\.github$
 ^CRAN-SUBMISSION$
 .Rproj.user
+
+# local analyses, not part of the package
+showcase/

@@ -21,4 +21,4 @@
 ^vignettes/.*\.R$
 
 .github
-.data
+.data^showcase(/|$)
