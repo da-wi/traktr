@@ -59,6 +59,8 @@
 #' @param id_col Name of the AOI id column.
 #' @param files Character vector of GeoTIFF paths sharing one CRS.
 #' @param band Band (layer) index to summarise.
+#' @param count_band,min_count Optional band holding a per-pixel observation
+#'   count; pixels with a count below \code{min_count} are masked out.
 #' @param deduplicate Extract identical geometries only once.
 #' @param crs_planar Projected CRS the AOI is transformed to before extraction.
 #' @param ids Optional subset of AOI ids to extract (all if \code{NULL}).
@@ -71,6 +73,8 @@
 #' @noRd
 .extract_continuous <- function(aoi, id_col, files,
                                 band = 1,
+                                count_band = NULL,
+                                min_count = NULL,
                                 deduplicate = TRUE,
                                 crs_planar = 3857,
                                 ids = NULL) {
@@ -78,7 +82,15 @@
   if (band > terra::nlyr(r)) {
     cli::cli_abort("Raster has {terra::nlyr(r)} band{?s}; cannot select band {band}.")
   }
-  r <- r[[band]]
+  if (!is.null(count_band)) {
+    if (count_band > terra::nlyr(r)) {
+      cli::cli_abort("Raster has no observation-count band {count_band}; cannot apply a minimum count.")
+    }
+    enough <- r[[count_band]] >= min_count
+    r <- terra::mask(r[[band]], enough, maskvalues = c(0, NA))
+  } else {
+    r <- r[[band]]
+  }
 
   if (!is.null(ids)) aoi <- aoi[aoi[[id_col]] %in% ids, , drop = FALSE]
 

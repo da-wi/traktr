@@ -15,7 +15,12 @@
 #'   areas in meters. Defaults to Web Mercator (EPSG:3857).
 #' @param prefix Prefix for output column names. Default is \code{"ndvi_"}.
 #' @param band Band (layer) of the GeoTIFFs holding NDVI. Defaults to 1;
-#'   further bands (e.g. a data mask or observation count) are ignored.
+#'   further bands (e.g. a data mask or observation count) are not averaged in.
+#' @param min_obs Optional minimum number of clear observations per pixel.
+#'   Pixels whose observation count (band 2 of chips from
+#'   \code{fetch_ndvi(composite = "median")} or \code{\link{fetch_ndvi_stac}})
+#'   is below \code{min_obs} are dropped before summarising. \code{NULL}
+#'   (default) keeps every pixel with a valid NDVI.
 #' @param progress Logical. If \code{TRUE} (default), show progress messages
 #'   during extraction.
 #'
@@ -56,6 +61,7 @@ attach_ndvi <- function(df,
                         crs_planar = 3857,
                         prefix = "ndvi_",
                         band = 1,
+                        min_obs = NULL,
                         progress = TRUE) {
   # check dependencies
   rlang::check_installed(c("sf", "terra", "cli", "exactextractr"))
@@ -70,6 +76,8 @@ attach_ndvi <- function(df,
   stats <- .extract_continuous(
     info$aoi, info$id_col, files,
     band        = band,
+    count_band  = if (is.null(min_obs)) NULL else 2L,
+    min_count   = min_obs,
     deduplicate = deduplicate,
     crs_planar  = crs_planar
   )

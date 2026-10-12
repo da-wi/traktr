@@ -51,3 +51,27 @@ test_that("nearest year mapping", {
   expect_equal(.nearest_year(c(1999L, 2007L, NA, 2030L), c(2000L, 2005L, 2010L)),
                c(2000L, 2005L, NA, 2010L))
 })
+
+test_that("attach_ndvi min_obs drops pixels with too few observations", {
+  skip_if_not_installed("exactextractr")
+  dir <- withr::local_tempdir()
+  # band 1 NDVI: left half 0.2, right half 0.8; band 2 count: left 1, right 10
+  r <- terra::rast(terra::ext(15.5, 15.7, 48.3, 48.5), resolution = 0.001, crs = "EPSG:4326", nlyrs = 2)
+  xy <- terra::xFromCell(r, seq_len(terra::ncell(r)))
+  left <- xy < 15.6005
+  terra::values(r) <- cbind(ifelse(left, 0.2, 0.8), ifelse(left, 1, 10))
+  terra::writeRaster(r, file.path(dir, "ndvi_chip.tif"))
+  
+  all <- attach_ndvi(make_df(), out_dir = dir, progress = FALSE)
+  few <- attach_ndvi(make_df(), out_dir = dir, min_obs = 5, progress = FALSE)
+  expect_gt(all$ndvi_max[1], all$ndvi_min[1])         # AOI 1 straddles both halves
+  expect_equal(few$ndvi_mean[1], 0.8, tolerance = 1e-6) # only well-observed pixels left
+})
+
+test_that("chip file names tag the composite method, leastcc keeps old names", {
+  chip <- sf::st_sf(geometry = sf::st_as_sfc(sf::st_bbox(c(xmin = 1, ymin = 2, xmax = 3, ymax = 4), crs = 4326)))
+  expect_equal(basename(.ndvi_chip_file("d", chip, "2024-06-01", "2024-08-31", "leastcc")),
+               "ndvi_1_2_3_4_2024-06-01_2024-08-31.tif")
+  expect_equal(basename(.ndvi_chip_file("d", chip, "2024-06-01", "2024-08-31", "median")),
+               "ndvi_median_1_2_3_4_2024-06-01_2024-08-31.tif")
+})

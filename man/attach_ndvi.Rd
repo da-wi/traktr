@@ -11,6 +11,7 @@ attach_ndvi(
   crs_planar = 3857,
   prefix = "ndvi_",
   band = 1,
+  min_obs = NULL,
   progress = TRUE
 )
 }
@@ -30,7 +31,13 @@ areas in meters. Defaults to Web Mercator (EPSG:3857).}
 \item{prefix}{Prefix for output column names. Default is \code{"ndvi_"}.}
 
 \item{band}{Band (layer) of the GeoTIFFs holding NDVI. Defaults to 1;
-further bands (e.g. a data mask or observation count) are ignored.}
+further bands (e.g. a data mask or observation count) are not averaged in.}
+
+\item{min_obs}{Optional minimum number of clear observations per pixel.
+Pixels whose observation count (band 2 of chips from
+\code{fetch_ndvi(composite = "median")} or \code{\link{fetch_ndvi_stac}})
+is below \code{min_obs} are dropped before summarising. \code{NULL}
+(default) keeps every pixel with a valid NDVI.}
 
 \item{progress}{Logical. If \code{TRUE} (default), show progress messages
 during extraction.}

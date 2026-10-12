@@ -13,7 +13,8 @@ fetch_ndvi(
   tile_max_px = 2500,
   tile_overlap_px = 0,
   client,
-  evalscript = .ndvi_evalscript_path(),
+  composite = c("median", "leastcc"),
+  evalscript = NULL,
   rate = ratelimitr::rate(n = 2, period = 1),
   overwrite = FALSE,
   progress = TRUE,
@@ -46,8 +47,15 @@ Controls chip size and request count.}
 \item{client}{OAuth client for CDSE. Typically an \code{httr2} OAuth client
 or equivalent object.}
 
-\item{evalscript}{Path or character string containing the Sentinel Hub
-evalscript to compute NDVI.}
+\item{composite}{How scenes in \code{from}-\code{to} are combined:
+\code{"median"} (default) masks clouds, cloud shadows, cirrus and snow
+with the Sentinel-2 scene classification (SCL) and takes the per-pixel
+median NDVI over all clear observations; \code{"leastcc"} takes a single
+least-cloudy scene per pixel without cloud masking (the behaviour of
+earlier versions).}
+
+\item{evalscript}{Optional path to a custom Sentinel Hub evalscript. If
+\code{NULL} (default), the script bundled for \code{composite} is used.}
 
 \item{rate}{A \code{ratelimitr::rate()} object controlling request rate,
 e.g. \code{ratelimitr::rate(n = 2, period = 1)}.}
@@ -83,8 +91,16 @@ caching, and records output metadata on the input object.
 \itemize{
 \item AOI handling: The AOI is validated, transformed to EPSG:4326, and used to
 build request chips. If the AOI has no CRS, the call aborts.
-\item Caching: Filenames encode the chip bounding box (xmin, ymin, xmax, ymax)
-and the date range, which provides a stable cache key across runs.
+\item Output: 2-band GeoTIFFs. With \code{composite = "median"}, band 1 is the
+median NDVI and band 2 the number of clear observations (as in
+\code{\link{fetch_ndvi_stac}}); with \code{"leastcc"}, band 2 is the data
+mask. \code{\link{attach_ndvi}} reads band 1.
+\item Choose a date range with several overpasses (e.g. a full season) for the
+median composite; Sentinel-2 revisits every ~5 days, but clouds remove
+many observations. Multi-temporal requests use more CDSE processing units.
+\item Caching: Filenames encode the composite method, the chip bounding box
+(xmin, ymin, xmax, ymax) and the date range, which provides a stable cache
+key across runs.
 \item Rate limiting: All remote requests are wrapped with \code{ratelimitr}.
 \item Attributes:
 \itemize{

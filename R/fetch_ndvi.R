@@ -18,8 +18,14 @@
 #' @param tile_overlap_px Optional overlap between adjacent tiles in pixels.
 #' @param client OAuth client for CDSE. Typically an \code{httr2} OAuth client
 #'   or equivalent object.
-#' @param evalscript Path or character string containing the Sentinel Hub
-#'   evalscript to compute NDVI.
+#' @param composite How scenes in \code{from}-\code{to} are combined:
+#'   \code{"median"} (default) masks clouds, cloud shadows, cirrus and snow
+#'   with the Sentinel-2 scene classification (SCL) and takes the per-pixel
+#'   median NDVI over all clear observations; \code{"leastcc"} takes a single
+#'   least-cloudy scene per pixel without cloud masking (the behaviour of
+#'   earlier versions).
+#' @param evalscript Optional path to a custom Sentinel Hub evalscript. If
+#'   \code{NULL} (default), the script bundled for \code{composite} is used.
 #' @param rate A \code{ratelimitr::rate()} object controlling request rate,
 #'   e.g. \code{ratelimitr::rate(n = 2, period = 1)}.
 #' @param overwrite Logical. If \code{FALSE} (default), existing files are
@@ -37,8 +43,16 @@
 #' @details
 #' - AOI handling: The AOI is validated, transformed to EPSG:4326, and used to
 #'   build request chips. If the AOI has no CRS, the call aborts.
-#' - Caching: Filenames encode the chip bounding box (xmin, ymin, xmax, ymax)
-#'   and the date range, which provides a stable cache key across runs.
+#' - Output: 2-band GeoTIFFs. With \code{composite = "median"}, band 1 is the
+#'   median NDVI and band 2 the number of clear observations (as in
+#'   \code{\link{fetch_ndvi_stac}}); with \code{"leastcc"}, band 2 is the data
+#'   mask. \code{\link{attach_ndvi}} reads band 1.
+#' - Choose a date range with several overpasses (e.g. a full season) for the
+#'   median composite; Sentinel-2 revisits every ~5 days, but clouds remove
+#'   many observations. Multi-temporal requests use more CDSE processing units.
+#' - Caching: Filenames encode the composite method, the chip bounding box
+#'   (xmin, ymin, xmax, ymax) and the date range, which provides a stable cache
+#'   key across runs.
 #' - Rate limiting: All remote requests are wrapped with \code{ratelimitr}.
 #' - Attributes:
 #'   * \code{attr(df, "ndvi_aoi")} stores an \code{sf} index of chips with
@@ -79,7 +93,8 @@ fetch_ndvi <- function(
     tile_max_px      = 2500,
     tile_overlap_px  = 0,
     client,                           # required: OAuth client for CDSE
-    evalscript       = .ndvi_evalscript_path(),
+    composite        = c("median", "leastcc"),
+    evalscript       = NULL,
     rate             = ratelimitr::rate(n = 2, period = 1),
     overwrite        = FALSE,
     progress         = TRUE,
@@ -111,6 +126,11 @@ fetch_ndvi <- function(
     rate <- ratelimitr::rate(n = n, period = p)
   }
   
+  # -- compositing method -> evalscript + mosaicking order ---------------
+  composite <- match.arg(composite)
+  if (is.null(evalscript)) evalscript <- .ndvi_evalscript_path(composite)
+  mosaicking_order <- if (composite == "median") "mostRecent" else "leastCC"
+
   # -- AOI, dirs, and progress ------------------------------------------
   aoi <- .resolve_aoi(df, aoi)
   dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
@@ -136,29 +156,16 @@ fetch_ndvi <- function(
   idx <- seq_len(n_tiles)
   
   # 2) Safe + rate-limited chip fetch
-  safe_one <- function(i) {
+  safe_one <- function(i, out_file) {
     tryCatch({
-      bbox <- sf::st_bbox(tiles$chips_wgs84[i, ])
-      
-      filename <- sprintf(
-        "ndvi_%s_%s_%s_%s_%s_%s.tif",
-        .sanitize_num(bbox$xmin),
-        .sanitize_num(bbox$ymin),
-        .sanitize_num(bbox$xmax),
-        .sanitize_num(bbox$ymax),
-        as.character(as.Date(from)),
-        as.character(as.Date(to))
-      )
-      
-      out_file <- file.path(out_dir, filename)
-      
       result <- .cdse_fetch_chip(
         tiles$chips_wgs84[i, ],
         from, to,
         evalscript,
         out_file,
-        resolution = resolution_m,
-        client     = client
+        resolution       = resolution_m,
+        mosaicking_order = mosaicking_order,
+        client           = client
       )
       
       list(result = result, error = NULL)
@@ -184,40 +191,32 @@ fetch_ndvi <- function(
   for (j in seq_along(idx)) {
     i <- idx[j]
     
-    bbox <- sf::st_bbox(tiles$chips_wgs84[i, ])
-    filename <- sprintf(
-      "ndvi_%s_%s_%s_%s_%s_%s.tif",
-      .sanitize_num(bbox$xmin),
-      .sanitize_num(bbox$ymin),
-      .sanitize_num(bbox$xmax),
-      .sanitize_num(bbox$ymax),
-      as.character(as.Date(from)),
-      as.character(as.Date(to))
-    )
-    out_file <- file.path(out_dir, filename)
-    
+    out_file <- .ndvi_chip_file(out_dir, tiles$chips_wgs84[i, ], from, to, composite)
+
     if (!overwrite && file.exists(out_file)) {
       skipped <- skipped + 1L
       res_list[[j]] <- tibble::tibble(
         tile_id = tiles$chips_wgs84$tile_id[i],
         file    = out_file,
-        status  = "skipped"
+        status  = "skipped",
+        msg     = NA_character_
       )
     } else {
       if (is.null(client)) {
         cli::cli_abort("No OAuth client set. Pass a valid `client`.")
       }
-      ans <- limited(i)
-      
+      ans <- limited(i, out_file)
+
       if (!is.null(ans$error)) {
         res_list[[j]] <- tibble::tibble(
           tile_id = tiles$chips_wgs84$tile_id[i],
           file    = NA_character_,
           status  = "error",
-          msg     = paste(ans$error)
+          msg     = conditionMessage(ans$error)
         )
       } else {
         res_list[[j]] <- ans$result
+        res_list[[j]]$msg <- NA_character_
       }
     }
     
@@ -249,6 +248,7 @@ fetch_ndvi <- function(
     resolution_m = resolution_m,
     tile_max_px = tile_max_px,
     tile_overlap_px = tile_overlap_px,
+    composite = composite,
     evalscript = evalscript,
     rate = rate,
     overwrite = overwrite
@@ -263,6 +263,7 @@ fetch_ndvi <- function(
       resolution_m = resolution_m,
       tile_max_px = tile_max_px,
       tile_overlap_px = tile_overlap_px,
+      composite = composite,
       evalscript = evalscript,
       rate = rate,
       overwrite = overwrite
@@ -452,8 +453,37 @@ fetch_ndvi <- function(
 #'
 #' @keywords internal
 #' @noRd
-.ndvi_evalscript_path <- function() {
-  system.file("ext", "ndvi_default_2band.js", package = "traktr", mustWork = TRUE)
+.ndvi_evalscript_path <- function(composite = c("median", "leastcc")) {
+  composite <- match.arg(composite)
+  file <- switch(composite,
+    median  = "ndvi_s2_median_scl.js",
+    leastcc = "ndvi_default_2band.js"
+  )
+  system.file("ext", file, package = "traktr", mustWork = TRUE)
+}
+
+
+#' Cache file of one NDVI chip
+#'
+#' Encodes composite method, chip bounding box and date range. The
+#' \code{"leastcc"} composite keeps the historical name (no method tag), so
+#' existing caches stay valid.
+#'
+#' @keywords internal
+#' @noRd
+.ndvi_chip_file <- function(out_dir, chip, from, to, composite) {
+  bbox <- sf::st_bbox(chip)
+  tag  <- if (composite == "leastcc") "" else paste0(composite, "_")
+  file.path(out_dir, sprintf(
+    "ndvi_%s%s_%s_%s_%s_%s_%s.tif",
+    tag,
+    .sanitize_num(bbox$xmin),
+    .sanitize_num(bbox$ymin),
+    .sanitize_num(bbox$xmax),
+    .sanitize_num(bbox$ymax),
+    as.character(as.Date(from)),
+    as.character(as.Date(to))
+  ))
 }
 
 
