@@ -24,8 +24,15 @@
 #'   median NDVI over all clear observations; \code{"leastcc"} takes a single
 #'   least-cloudy scene per pixel without cloud masking (the behaviour of
 #'   earlier versions).
+#' @param fallback Only for \code{composite = "median"}. If \code{TRUE}
+#'   (default), pixels without a clear observation fall back to (2) the median
+#'   of observations without dense cloud, cloud shadow or snow, then (3) the
+#'   maximum NDVI of all observations (maximum value composite), so a pixel is
+#'   only missing if the time range holds no observation at all. The tier used
+#'   is stored in band 3. If \code{FALSE}, only clear observations are used.
 #' @param evalscript Optional path to a custom Sentinel Hub evalscript. If
-#'   \code{NULL} (default), the script bundled for \code{composite} is used.
+#'   \code{NULL} (default), the script bundled for \code{composite} and
+#'   \code{fallback} is used.
 #' @param rate A \code{ratelimitr::rate()} object controlling request rate,
 #'   e.g. \code{ratelimitr::rate(n = 2, period = 1)}.
 #' @param overwrite Logical. If \code{FALSE} (default), existing files are
@@ -43,10 +50,12 @@
 #' @details
 #' - AOI handling: The AOI is validated, transformed to EPSG:4326, and used to
 #'   build request chips. If the AOI has no CRS, the call aborts.
-#' - Output: 2-band GeoTIFFs. With \code{composite = "median"}, band 1 is the
-#'   median NDVI and band 2 the number of clear observations (as in
-#'   \code{\link{fetch_ndvi_stac}}); with \code{"leastcc"}, band 2 is the data
-#'   mask. \code{\link{attach_ndvi}} reads band 1.
+#' - Output: GeoTIFFs with band 1 NDVI. With \code{composite = "median"},
+#'   band 2 is the number of observations used (as in
+#'   \code{\link{fetch_ndvi_stac}}) and, with \code{fallback = TRUE}, band 3
+#'   the tier (1 clear, 2 relaxed cloud mask, 3 maximum value); with
+#'   \code{"leastcc"}, band 2 is the data mask. \code{\link{attach_ndvi}}
+#'   summarises band 1 and reports observation count and tier.
 #' - Choose a date range with several overpasses (e.g. a full season) for the
 #'   median composite; Sentinel-2 revisits every ~5 days, but clouds remove
 #'   many observations. Multi-temporal requests use more CDSE processing units.
@@ -94,6 +103,7 @@ fetch_ndvi <- function(
     tile_overlap_px  = 0,
     client,                           # required: OAuth client for CDSE
     composite        = c("median", "leastcc"),
+    fallback         = TRUE,
     evalscript       = NULL,
     rate             = ratelimitr::rate(n = 2, period = 1),
     overwrite        = FALSE,
@@ -128,7 +138,8 @@ fetch_ndvi <- function(
   
   # -- compositing method -> evalscript + mosaicking order ---------------
   composite <- match.arg(composite)
-  if (is.null(evalscript)) evalscript <- .ndvi_evalscript_path(composite)
+  method <- if (composite == "median" && isTRUE(fallback)) "medianfb" else composite
+  if (is.null(evalscript)) evalscript <- .ndvi_evalscript_path(method)
   mosaicking_order <- if (composite == "median") "mostRecent" else "leastCC"
 
   # -- AOI, dirs, and progress ------------------------------------------
@@ -191,7 +202,7 @@ fetch_ndvi <- function(
   for (j in seq_along(idx)) {
     i <- idx[j]
     
-    out_file <- .ndvi_chip_file(out_dir, tiles$chips_wgs84[i, ], from, to, composite)
+    out_file <- .ndvi_chip_file(out_dir, tiles$chips_wgs84[i, ], from, to, method)
 
     if (!overwrite && file.exists(out_file)) {
       skipped <- skipped + 1L
@@ -249,6 +260,7 @@ fetch_ndvi <- function(
     tile_max_px = tile_max_px,
     tile_overlap_px = tile_overlap_px,
     composite = composite,
+    fallback = fallback,
     evalscript = evalscript,
     rate = rate,
     overwrite = overwrite
@@ -264,6 +276,7 @@ fetch_ndvi <- function(
       tile_max_px = tile_max_px,
       tile_overlap_px = tile_overlap_px,
       composite = composite,
+      fallback = fallback,
       evalscript = evalscript,
       rate = rate,
       overwrite = overwrite
@@ -453,11 +466,12 @@ fetch_ndvi <- function(
 #'
 #' @keywords internal
 #' @noRd
-.ndvi_evalscript_path <- function(composite = c("median", "leastcc")) {
-  composite <- match.arg(composite)
-  file <- switch(composite,
-    median  = "ndvi_s2_median_scl.js",
-    leastcc = "ndvi_default_2band.js"
+.ndvi_evalscript_path <- function(method = c("medianfb", "median", "leastcc")) {
+  method <- match.arg(method)
+  file <- switch(method,
+    medianfb = "ndvi_s2_median_fallback.js",
+    median   = "ndvi_s2_median_scl.js",
+    leastcc  = "ndvi_default_2band.js"
   )
   system.file("ext", file, package = "traktr", mustWork = TRUE)
 }
@@ -465,15 +479,15 @@ fetch_ndvi <- function(
 
 #' Cache file of one NDVI chip
 #'
-#' Encodes composite method, chip bounding box and date range. The
-#' \code{"leastcc"} composite keeps the historical name (no method tag), so
-#' existing caches stay valid.
+#' Encodes compositing method (\code{"medianfb"}, \code{"median"},
+#' \code{"leastcc"}), chip bounding box and date range. \code{"leastcc"} keeps
+#' the historical name (no method tag), so existing caches stay valid.
 #'
 #' @keywords internal
 #' @noRd
-.ndvi_chip_file <- function(out_dir, chip, from, to, composite) {
+.ndvi_chip_file <- function(out_dir, chip, from, to, method) {
   bbox <- sf::st_bbox(chip)
-  tag  <- if (composite == "leastcc") "" else paste0(composite, "_")
+  tag  <- if (method == "leastcc") "" else paste0(method, "_")
   file.path(out_dir, sprintf(
     "ndvi_%s%s_%s_%s_%s_%s_%s.tif",
     tag,

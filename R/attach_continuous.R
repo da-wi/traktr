@@ -61,13 +61,18 @@
 #' @param band Band (layer) index to summarise.
 #' @param count_band,min_count Optional band holding a per-pixel observation
 #'   count; pixels with a count below \code{min_count} are masked out.
+#' @param extra_bands Optional named list of further bands to summarise over
+#'   the pixels that have a valid value in \code{band}, each as
+#'   \code{list(band = <index>, fun = <exactextractr operation>)}, e.g.
+#'   \code{list(n_obs = list(band = 2, fun = "mean"))}. Bands the raster does
+#'   not have are skipped.
 #' @param deduplicate Extract identical geometries only once.
 #' @param crs_planar Projected CRS the AOI is transformed to before extraction.
 #' @param ids Optional subset of AOI ids to extract (all if \code{NULL}).
 #'
 #' @return A data frame with \code{id_col} and the unprefixed statistic
-#'   columns (\code{mean}, \code{sd}, \code{min}, \code{max}, \code{median}),
-#'   one row per AOI id.
+#'   columns (\code{mean}, \code{sd}, \code{min}, \code{max}, \code{median},
+#'   plus one column per entry of \code{extra_bands}), one row per AOI id.
 #'
 #' @keywords internal
 #' @noRd
@@ -75,21 +80,43 @@
                                 band = 1,
                                 count_band = NULL,
                                 min_count = NULL,
+                                extra_bands = NULL,
                                 deduplicate = TRUE,
                                 crs_planar = 3857,
                                 ids = NULL) {
-  r <- if (length(files) == 1L) terra::rast(files) else terra::vrt(terra::sprc(files))
-  if (band > terra::nlyr(r)) {
-    cli::cli_abort("Raster has {terra::nlyr(r)} band{?s}; cannot select band {band}.")
+  r_all <- if (length(files) == 1L) terra::rast(files) else terra::vrt(terra::sprc(files))
+  nl <- terra::nlyr(r_all)
+  if (band > nl) {
+    cli::cli_abort("Raster has {nl} band{?s}; cannot select band {band}.")
   }
-  if (!is.null(count_band)) {
-    if (count_band > terra::nlyr(r)) {
-      cli::cli_abort("Raster has no observation-count band {count_band}; cannot apply a minimum count.")
+  if (!is.null(count_band) && count_band > nl) {
+    cli::cli_abort("Raster has no observation-count band {count_band}; cannot apply a minimum count.")
+  }
+  extra_bands <- Filter(function(e) e$band <= nl, extra_bands)
+
+  # one extraction pass over the needed bands; masking happens per polygon
+  # inside the summary function, never on the whole (possibly huge) mosaic
+  layers <- unique(c(band, count_band, vapply(extra_bands, `[[`, numeric(1), "band")))
+  r <- r_all[[layers]]
+  col_of <- function(b) match(b, layers)
+
+  summary_fn <- function(values, coverage_fraction) {
+    values <- as.data.frame(values)
+    v <- values[[col_of(band)]]
+    if (!is.null(count_band)) v[!(values[[col_of(count_band)]] >= min_count)] <- NA
+    out <- .continuous_summary_fn(v, coverage_fraction)
+    ok <- is.finite(v) & is.finite(coverage_fraction) & coverage_fraction > 0
+    for (nm in names(extra_bands)) {
+      e <- extra_bands[[nm]]
+      x <- values[[col_of(e$band)]][ok]
+      w <- coverage_fraction[ok]
+      out[[nm]] <- if (!length(x) || all(is.na(x))) NA_real_ else switch(e$fun,
+        mean = sum(x * w, na.rm = TRUE) / sum(w[!is.na(x)]),
+        max  = max(x, na.rm = TRUE),
+        cli::cli_abort("Unsupported summary {.val {e$fun}}.")
+      )
     }
-    enough <- r[[count_band]] >= min_count
-    r <- terra::mask(r[[band]], enough, maskvalues = c(0, NA))
-  } else {
-    r <- r[[band]]
+    out
   }
 
   if (!is.null(ids)) aoi <- aoi[aoi[[id_col]] %in% ids, , drop = FALSE]
@@ -100,8 +127,7 @@
   # match the raster CRS (e.g. Mollweide for HFP) to avoid on-the-fly transforms
   au <- sf::st_transform(dd$aoi_unique, terra::crs(r))
 
-  res <- exactextractr::exact_extract(r, au, fun = .continuous_summary_fn,
-                                      progress = FALSE)
+  res <- exactextractr::exact_extract(r, au, fun = summary_fn, progress = FALSE)
   if (is.list(res) && !is.data.frame(res)) {
     res <- do.call(rbind, res)
     rownames(res) <- NULL

@@ -33,11 +33,12 @@ areas in meters. Defaults to Web Mercator (EPSG:3857).}
 \item{band}{Band (layer) of the GeoTIFFs holding NDVI. Defaults to 1;
 further bands (e.g. a data mask or observation count) are not averaged in.}
 
-\item{min_obs}{Optional minimum number of clear observations per pixel.
-Pixels whose observation count (band 2 of chips from
+\item{min_obs}{Optional minimum number of observations per pixel. Pixels
+whose observation count (band 2 of chips from
 \code{fetch_ndvi(composite = "median")} or \code{\link{fetch_ndvi_stac}})
-is below \code{min_obs} are dropped before summarising. \code{NULL}
-(default) keeps every pixel with a valid NDVI.}
+is below \code{min_obs} are dropped before summarising. With
+\code{fallback = TRUE} the count refers to the tier used for that pixel.
+\code{NULL} (default) keeps every pixel with a valid NDVI.}
 
 \item{progress}{Logical. If \code{TRUE} (default), show progress messages
 during extraction.}
@@ -59,7 +60,12 @@ to ensure that surface area is measured in square meters.
 computing the statistics.
 \item Output: Five new columns are created per AOI:
 \code{ndvi_mean}, \code{ndvi_sd}, \code{ndvi_min}, \code{ndvi_max},
-\code{ndvi_median}.
+\code{ndvi_median}. For median composites (\code{fetch_ndvi()} default,
+\code{\link{fetch_ndvi_stac}}) also \code{ndvi_n_obs}, the area-weighted
+mean number of observations per pixel, and for
+\code{fetch_ndvi(fallback = TRUE)} \code{ndvi_tier}, the worst tier used
+in the AOI (1 clear, 2 relaxed cloud mask, 3 maximum value composite).
+Use \code{ndvi_tier} for sensitivity analyses, e.g. \code{ndvi_tier == 1}.
 }
 }
 \section{Attributes}{

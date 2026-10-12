@@ -74,4 +74,27 @@ test_that("chip file names tag the composite method, leastcc keeps old names", {
                "ndvi_1_2_3_4_2024-06-01_2024-08-31.tif")
   expect_equal(basename(.ndvi_chip_file("d", chip, "2024-06-01", "2024-08-31", "median")),
                "ndvi_median_1_2_3_4_2024-06-01_2024-08-31.tif")
+  expect_equal(basename(.ndvi_chip_file("d", chip, "2024-06-01", "2024-08-31", "medianfb")),
+               "ndvi_medianfb_1_2_3_4_2024-06-01_2024-08-31.tif")
+})
+
+test_that("attach_ndvi reports observation count and worst tier", {
+  skip_if_not_installed("exactextractr")
+  dir <- withr::local_tempdir()
+  # left half: tier 1 with 3 obs; right half: tier 3 with 1 obs
+  r <- terra::rast(terra::ext(15.5, 15.7, 48.3, 48.5), resolution = 0.001, crs = "EPSG:4326", nlyrs = 3)
+  left <- terra::xFromCell(r, seq_len(terra::ncell(r))) < 15.6005
+  terra::values(r) <- cbind(ifelse(left, 0.5, 0.3), ifelse(left, 3, 1), ifelse(left, 1, 3))
+  terra::writeRaster(r, file.path(dir, "ndvi_medianfb_chip.tif"))
+
+  out <- attach_ndvi(make_df(), out_dir = dir, progress = FALSE)
+  expect_equal(out$ndvi_tier, c(3, 3, 3))          # AOIs 1-2 straddle, AOI 3 right half
+  expect_true(out$ndvi_n_obs[1] > 1 && out$ndvi_n_obs[1] < 3)
+  expect_equal(out$ndvi_n_obs[3], 1)
+
+  # least-cloudy chips (band 2 = data mask) get no count/tier columns
+  dir2 <- withr::local_tempdir()
+  write_const_raster(file.path(dir2, "ndvi_1_2_3_4_2024-06-01_2024-06-30.tif"), c(0.5, 1), nlyr = 2)
+  out2 <- attach_ndvi(make_df(), out_dir = dir2, progress = FALSE)
+  expect_false(any(c("ndvi_n_obs", "ndvi_tier") %in% names(out2)))
 })

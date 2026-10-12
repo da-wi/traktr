@@ -16,11 +16,12 @@
 #' @param prefix Prefix for output column names. Default is \code{"ndvi_"}.
 #' @param band Band (layer) of the GeoTIFFs holding NDVI. Defaults to 1;
 #'   further bands (e.g. a data mask or observation count) are not averaged in.
-#' @param min_obs Optional minimum number of clear observations per pixel.
-#'   Pixels whose observation count (band 2 of chips from
+#' @param min_obs Optional minimum number of observations per pixel. Pixels
+#'   whose observation count (band 2 of chips from
 #'   \code{fetch_ndvi(composite = "median")} or \code{\link{fetch_ndvi_stac}})
-#'   is below \code{min_obs} are dropped before summarising. \code{NULL}
-#'   (default) keeps every pixel with a valid NDVI.
+#'   is below \code{min_obs} are dropped before summarising. With
+#'   \code{fallback = TRUE} the count refers to the tier used for that pixel.
+#'   \code{NULL} (default) keeps every pixel with a valid NDVI.
 #' @param progress Logical. If \code{TRUE} (default), show progress messages
 #'   during extraction.
 #'
@@ -31,7 +32,12 @@
 #'   computing the statistics.
 #' - Output: Five new columns are created per AOI:
 #'   \code{ndvi_mean}, \code{ndvi_sd}, \code{ndvi_min}, \code{ndvi_max},
-#'   \code{ndvi_median}.
+#'   \code{ndvi_median}. For median composites (\code{fetch_ndvi()} default,
+#'   \code{\link{fetch_ndvi_stac}}) also \code{ndvi_n_obs}, the area-weighted
+#'   mean number of observations per pixel, and for
+#'   \code{fetch_ndvi(fallback = TRUE)} \code{ndvi_tier}, the worst tier used
+#'   in the AOI (1 clear, 2 relaxed cloud mask, 3 maximum value composite).
+#'   Use \code{ndvi_tier} for sensitivity analyses, e.g. \code{ndvi_tier == 1}.
 #'
 #' @section Attributes:
 #' Attributes of \code{df} are preserved. AOI and fetch metadata (e.g.,
@@ -72,12 +78,21 @@ attach_ndvi <- function(df,
   
   info  <- .aoi_detect(df)
   files <- .collect_raster_files(df, "ndvi_aoi", out_dir)
-  
+
+  # band 2 is an observation count for median/STAC chips; for least-cloudy
+  # chips (historical names without method tag) it is only a data mask
+  has_count <- !all(grepl("^ndvi_[_0-9]", basename(files)))
+  extra <- if (has_count) {
+    list(n_obs = list(band = 2L, fun = "mean"),   # coverage-weighted mean
+         tier  = list(band = 3L, fun = "max"))    # worst tier in the AOI
+  }
+
   stats <- .extract_continuous(
     info$aoi, info$id_col, files,
     band        = band,
     count_band  = if (is.null(min_obs)) NULL else 2L,
     min_count   = min_obs,
+    extra_bands = extra,
     deduplicate = deduplicate,
     crs_planar  = crs_planar
   )

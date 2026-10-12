@@ -14,6 +14,7 @@ fetch_ndvi(
   tile_overlap_px = 0,
   client,
   composite = c("median", "leastcc"),
+  fallback = TRUE,
   evalscript = NULL,
   rate = ratelimitr::rate(n = 2, period = 1),
   overwrite = FALSE,
@@ -54,8 +55,16 @@ median NDVI over all clear observations; \code{"leastcc"} takes a single
 least-cloudy scene per pixel without cloud masking (the behaviour of
 earlier versions).}
 
+\item{fallback}{Only for \code{composite = "median"}. If \code{TRUE}
+(default), pixels without a clear observation fall back to (2) the median
+of observations without dense cloud, cloud shadow or snow, then (3) the
+maximum NDVI of all observations (maximum value composite), so a pixel is
+only missing if the time range holds no observation at all. The tier used
+is stored in band 3. If \code{FALSE}, only clear observations are used.}
+
 \item{evalscript}{Optional path to a custom Sentinel Hub evalscript. If
-\code{NULL} (default), the script bundled for \code{composite} is used.}
+\code{NULL} (default), the script bundled for \code{composite} and
+\code{fallback} is used.}
 
 \item{rate}{A \code{ratelimitr::rate()} object controlling request rate,
 e.g. \code{ratelimitr::rate(n = 2, period = 1)}.}
@@ -91,10 +100,12 @@ caching, and records output metadata on the input object.
 \itemize{
 \item AOI handling: The AOI is validated, transformed to EPSG:4326, and used to
 build request chips. If the AOI has no CRS, the call aborts.
-\item Output: 2-band GeoTIFFs. With \code{composite = "median"}, band 1 is the
-median NDVI and band 2 the number of clear observations (as in
-\code{\link{fetch_ndvi_stac}}); with \code{"leastcc"}, band 2 is the data
-mask. \code{\link{attach_ndvi}} reads band 1.
+\item Output: GeoTIFFs with band 1 NDVI. With \code{composite = "median"},
+band 2 is the number of observations used (as in
+\code{\link{fetch_ndvi_stac}}) and, with \code{fallback = TRUE}, band 3
+the tier (1 clear, 2 relaxed cloud mask, 3 maximum value); with
+\code{"leastcc"}, band 2 is the data mask. \code{\link{attach_ndvi}}
+summarises band 1 and reports observation count and tier.
 \item Choose a date range with several overpasses (e.g. a full season) for the
 median composite; Sentinel-2 revisits every ~5 days, but clouds remove
 many observations. Multi-temporal requests use more CDSE processing units.
