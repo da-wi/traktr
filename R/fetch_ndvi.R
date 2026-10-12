@@ -453,7 +453,7 @@ fetch_ndvi <- function(
 #' @keywords internal
 #' @noRd
 .ndvi_evalscript_path <- function() {
-  return("inst/ext/ndvi_default_2band.js")
+  system.file("ext", "ndvi_default_2band.js", package = "traktr", mustWork = TRUE)
 }
 
 

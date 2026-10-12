@@ -2,7 +2,7 @@ Package: traktr
 Title: Tiling, Fetching and Summarising for AOIs (H3 or Buffers)
 Version: 0.0.1
 Authors@R: c(person("David","Willinger", email="david.willinger@kl.ac.at", role=c("aut","cre"), comment = c(ORCID = "0000-0002-3110-2355")))
-Description: Build request tiles, fetch Sentinel-2 NDVI (CDSE), and summarise per AOI in a tidy workflow.
+Description: Build request tiles, fetch Sentinel-2 NDVI (CDSE), historic Landsat or MODIS NDVI (STAC), WorldCover land use and the annual Human Footprint index, and summarise per AOI in a tidy workflow.
 License: GPL-3
 Encoding: UTF-8
 URL: .
@@ -24,8 +24,11 @@ Suggests:
     cartographr,
     dplyr,
     ggplot2,
+    jsonlite,
     purrr,
-    testthat (>= 3.0.0)
+    rstac (>= 1.0.0),
+    testthat (>= 3.0.0),
+    withr
 SystemRequirements: GDAL, GEOS, PROJ
 RoxygenNote: 7.3.2
 Config/testthat/edition: 3

@@ -10,6 +10,7 @@ attach_ndvi(
   deduplicate = TRUE,
   crs_planar = 3857,
   prefix = "ndvi_",
+  band = 1,
   progress = TRUE
 )
 }
@@ -27,6 +28,9 @@ geometry are extracted only once, then mapped back.}
 areas in meters. Defaults to Web Mercator (EPSG:3857).}
 
 \item{prefix}{Prefix for output column names. Default is \code{"ndvi_"}.}
+
+\item{band}{Band (layer) of the GeoTIFFs holding NDVI. Defaults to 1;
+further bands (e.g. a data mask or observation count) are ignored.}
 
 \item{progress}{Logical. If \code{TRUE} (default), show progress messages
 during extraction.}
