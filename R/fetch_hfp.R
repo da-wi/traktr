@@ -66,9 +66,14 @@ fetch_hfp <- function(df,
   if (!length(year) || anyNA(year)) cli::cli_abort("`year` must contain valid years.")
   dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
 
-  remote <- if (is.null(src)) .hfp_remote_files() else NULL
+  status <- character(length(year))
+  dests  <- file.path(out_dir, sprintf("hfp_%d.tif", year))
+
+  # ask figshare only for years that actually need downloading
+  need <- year[isTRUE(overwrite) | !file.exists(dests)]
+  remote <- if (is.null(src) && length(need)) .hfp_remote_files() else NULL
   if (!is.null(remote)) {
-    missing <- setdiff(year, remote$year)
+    missing <- setdiff(need, remote$year)
     if (length(missing)) {
       cli::cli_abort(c(
         "Year{?s} {missing} not available on figshare.",
@@ -76,9 +81,6 @@ fetch_hfp <- function(df,
       ))
     }
   }
-
-  status <- character(length(year))
-  dests  <- file.path(out_dir, sprintf("hfp_%d.tif", year))
 
   for (i in seq_along(year)) {
     y <- year[i]

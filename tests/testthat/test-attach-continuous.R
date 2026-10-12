@@ -98,3 +98,11 @@ test_that("attach_ndvi reports observation count and worst tier", {
   out2 <- attach_ndvi(make_df(), out_dir = dir2, progress = FALSE)
   expect_false(any(c("ndvi_n_obs", "ndvi_tier") %in% names(out2)))
 })
+
+test_that("fetch_hfp uses cached files without contacting figshare", {
+  dir <- withr::local_tempdir()
+  write_const_raster(file.path(dir, "hfp_2005.tif"), 10)
+  local_mocked_bindings(.hfp_remote_files = function(...) stop("network used"))
+  d <- fetch_hfp(make_df(), out_dir = dir, year = 2005, progress = FALSE)
+  expect_equal(attr(d, "hfp_tiles")$status, "exists")
+})
