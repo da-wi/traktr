@@ -19,3 +19,4 @@
 ^\.data(/|$)
 ^showcase(/|$)
 ^docs\.new(/|$)
+^validation(/|$)
