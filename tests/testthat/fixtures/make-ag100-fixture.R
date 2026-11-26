@@ -47,3 +47,11 @@ write_ag100_fixture(file.path(root, normal), 40, -105)
 write_ag100_fixture(file.path(root, "bad", normal), 40, -105, bad = TRUE)
 write_ag100_fixture(file.path(root, "AG100.v003.05.-075.0001.h5"), 5, -75,
                     vectors = TRUE)
+
+nodata <- file.path(root, "nodata", normal)
+write_ag100_fixture(nodata, 40, -105)
+file <- rhdf5::H5Fopen(nodata)
+dataset <- rhdf5::H5Dopen(file, "ASTER GDEM/ASTGDEM")
+rhdf5::h5writeAttribute(1511L, dataset, "_FillValue")
+rhdf5::H5Dclose(dataset)
+rhdf5::H5Fclose(file)

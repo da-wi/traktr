@@ -28,7 +28,11 @@ earthdata_auth_check <- function(verbose = TRUE) {
   c(
     "Earthdata credentials are missing.",
     "i" = "Create an Earthdata Login account and generate a token.",
-    "i" = "Set {.envvar EARTHDATA_TOKEN} in {.path ~/.Renviron} and restart R."
+    "i" = "Set {.envvar EARTHDATA_TOKEN} in {.path ~/.Renviron} and restart R.",
+    if (file.exists(".Renviron")) {
+      c("i" = paste("R reads only one user environment file.",
+                    "The project {.path .Renviron} takes precedence over {.path ~/.Renviron}."))
+    }
   )
 }
 

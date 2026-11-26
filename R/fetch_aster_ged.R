@@ -8,7 +8,8 @@
 #' @param out_dir Output directory for `ag100_v003_<north>_<west>.tif` files.
 #'   Created if needed.
 #' @param src Optional directory searched recursively for local AG100 HDF5 files.
-#' @param keep_h5 Whether to retain downloaded HDF5 files in `out_dir`.
+#' @param keep_h5 Whether to retain downloaded HDF5 files in `out_dir`,
+#'   including when GeoTIFF conversion fails.
 #' @param overwrite Whether to replace existing GeoTIFFs.
 #' @param use_cmr Whether to look up remote tiles via NASA's Common Metadata
 #'   Repository before falling back to constructed URLs.
@@ -158,17 +159,26 @@ fetch_aster_ged <- function(df, out_dir, src = NULL, keep_h5 = FALSE, overwrite 
       .ag100_download_retry(tile$url, staged_h5, handle)
       h5 <- staged_h5
     }
-    .ag100_h5_to_tif(h5, tile$tif, tile$lat_n, tile$lon_w)
-    # The GeoTIFF is the product; a failed keep_h5 rename only warns, so the
-    # tile status stays consistent with the published (cached) GeoTIFF.
-    msg <- NA_character_
+    conversion_error <- tryCatch({
+      .ag100_h5_to_tif(h5, tile$tif, tile$lat_n, tile$lon_w)
+      NULL
+    }, error = identity)
+    msg <- if (is.null(conversion_error)) NA_character_ else .ag100_error_message(conversion_error)
     if (!local && isTRUE(keep_h5)) {
       kept <- sub("\\.tif$", ".h5", tile$tif)
+      if (!is.null(conversion_error) && file.exists(kept)) {
+        kept <- tempfile(sub("\\.h5$", "-failed-", basename(kept)),
+                         tmpdir = dirname(kept), fileext = ".h5")
+      }
       if (!suppressWarnings(file.rename(staged_h5, kept))) {
-        msg <- paste0("GeoTIFF written, but the HDF5 file could not be retained at ", kept, ".")
-        cli::cli_warn(msg)
+        retention_error <- paste0("The HDF5 file could not be retained at ", kept, ".")
+        msg <- if (is.null(conversion_error)) retention_error else paste(msg, retention_error)
+        if (is.null(conversion_error)) cli::cli_warn("{msg}")
+      } else if (!is.null(conversion_error)) {
+        msg <- paste0(msg, " Downloaded HDF5 retained as ", basename(kept), ".")
       }
     }
+    if (!is.null(conversion_error)) return(list(status = "error", message = msg))
     list(status = if (local) "converted" else "downloaded", message = msg)
   }, error = function(e) {
     if (inherits(e, "ag100_auth_error")) stop(e)
@@ -214,51 +224,125 @@ fetch_aster_ged <- function(df, out_dir, src = NULL, keep_h5 = FALSE, overwrite 
   message
 }
 
+.ag100_read_array <- function(address) {
+  if (file.exists(address)) address <- normalizePath(address, winslash = "/")
+  info <- sf::gdal_utils("info", address, options = "-nomd", quiet = TRUE)
+  lines <- strsplit(info, "\n", fixed = TRUE)[[1L]]
+  size <- utils::strcapture("^Size is ([0-9]+), ([0-9]+)$",
+                           lines[startsWith(lines, "Size is ")],
+                           list(ncol = integer(), nrow = integer()))
+  if (nrow(size) != 1L || anyNA(size) || any(size <= 0L)) {
+    cli::cli_abort("Could not determine AG100 raster dimensions.")
+  }
+  bands <- grep("^Band [0-9]+ ", lines, value = TRUE)
+  if (length(bands) != 1L) cli::cli_abort("Expected one raster layer.")
+  type <- utils::strcapture(" Type=([[:alnum:]]+)", bands, list(type = character()))$type
+  if (is.na(type)) cli::cli_abort("Could not determine the AG100 raster data type.")
+  nodata <- grep("^NoData Value=", trimws(lines), value = TRUE)
+  nodata <- sub("^NoData Value=", "", nodata)
+
+  vrt <- tempfile("ag100-", fileext = ".vrt")
+  on.exit(unlink(vrt), add = TRUE)
+  # Keep the source's NoData marker. Read the remaining pixels without
+  # borrowing the source transform, projection, scale or offset.
+  source <- gsub("&", "&amp;", address, fixed = TRUE)
+  source <- gsub("<", "&lt;", source, fixed = TRUE)
+  source <- gsub(">", "&gt;", source, fixed = TRUE)
+  writeLines(c(
+    sprintf('<VRTDataset rasterXSize="%d" rasterYSize="%d">', size$ncol, size$nrow),
+    sprintf("  <GeoTransform>0,1,0,%d,0,-1</GeoTransform>", size$nrow),
+    sprintf('  <VRTRasterBand dataType="%s" band="1">', type),
+    if (length(nodata)) sprintf("    <NoDataValue>%s</NoDataValue>", nodata),
+    "    <SimpleSource>",
+    sprintf('      <SourceFilename relativeToVRT="0">%s</SourceFilename>', source),
+    "      <SourceBand>1</SourceBand>",
+    "    </SimpleSource>",
+    "  </VRTRasterBand>",
+    "</VRTDataset>"
+  ), vrt)
+  r <- withCallingHandlers(terra::rast(vrt), warning = function(w) {
+    if (grepl("unknown extent|the data in this file are rotated", conditionMessage(w))) {
+      invokeRestart("muffleWarning")
+    }
+  })
+  matrix(terra::values(r, mat = FALSE), size$nrow, size$ncol, byrow = TRUE)
+}
+
 .ag100_h5_to_tif <- function(h5, tif, lat_n, lon_w, tol = 1e-6) {
   bands <- c(elev = "ASTER GDEM/ASTGDEM", ndvi_mean = "NDVI/Mean", ndvi_sd = "NDVI/SDev",
              temp_mean = "Temperature/Mean", temp_sd = "Temperature/SDev",
              lwm = "Land Water Map/LWmap", nobs = "Observations/NumObs")
+  h5 <- normalizePath(h5, winslash = "/")
   subdatasets <- terra::describe(h5, sds = TRUE)
   read_dataset <- function(path, geolocation = FALSE) {
     pattern <- paste0("/", gsub(" ", "[ _]", path, fixed = TRUE), "$")
     address <- subdatasets$name[grepl(pattern, subdatasets$name)][1L]
     if (is.na(address) && geolocation) {
       # GDAL can open rank-one arrays directly when the listing omits them.
-      address <- sprintf('HDF5:"%s"://%s', normalizePath(h5, winslash = "/"), path)
+      address <- sprintf('HDF5:"%s"://%s', h5, path)
     }
     if (is.na(address)) cli::cli_abort("Missing AG100 dataset {.val {path}}.")
-    r <- tryCatch(
-      withCallingHandlers(terra::rast(address), warning = function(w) {
-        if (grepl("unknown extent", conditionMessage(w), fixed = TRUE)) {
-          invokeRestart("muffleWarning")
-        }
-      }),
+    tryCatch(
+      .ag100_read_array(address),
       error = function(e) cli::cli_abort("Could not read AG100 dataset {.val {path}}.", parent = e)
     )
-    if (terra::nlyr(r) != 1L) cli::cli_abort("Expected one layer in AG100 dataset {.val {path}}.")
-    if (!geolocation) terra::scoff(r) <- NULL
-    r
   }
 
-  rasters <- lapply(bands, read_dataset)
-  r <- do.call(c, unname(rasters))
-  nr <- terra::nrow(r)
-  nc <- terra::ncol(r)
-  lat <- .ag100_coordinate(read_dataset("Geolocation/Latitude", TRUE), nr, nc, "latitude", tol)
-  lon <- .ag100_coordinate(read_dataset("Geolocation/Longitude", TRUE), nr, nc, "longitude", tol)
+  first <- read_dataset(bands[[1L]])
+  nr <- nrow(first)
+  nc <- ncol(first)
+  lat <- read_dataset("Geolocation/Latitude", TRUE)
+  lon <- read_dataset("Geolocation/Longitude", TRUE)
+  if (any(!is.finite(lat))) cli::cli_abort("Invalid AG100 Geolocation/Latitude values.")
+  if (any(!is.finite(lon))) cli::cli_abort("Invalid AG100 Geolocation/Longitude values.")
+
+  vectors <- min(dim(lat)) == 1L && min(dim(lon)) == 1L
+  transposed <- if (vectors) {
+    nr != nc && length(lat) == nc && length(lon) == nr
+  } else {
+    identical(dim(lat), dim(first)) && identical(dim(lon), dim(first)) &&
+      any(abs(lat[1L, ] - lat[1L, 1L]) > tol) && any(abs(lon[, 1L] - lon[1L, 1L]) > tol) &&
+      all(abs(t(lat) - lat[1L, ]) <= tol) && all(abs(lon - lon[, 1L]) <= tol)
+  }
+  if (transposed) {
+    cli::cli_inform("AG100 tile {lat_n}.{lon_w}: transposed layout.")
+    lat <- t(lat)
+    lon <- t(lon)
+  }
+  output_dim <- if (transposed) c(nc, nr) else c(nr, nc)
+  lat <- .ag100_coordinate(lat, output_dim, "Geolocation/Latitude", tol)
+  lon <- .ag100_coordinate(lon, output_dim, "Geolocation/Longitude", tol)
+  if (vectors && nr == nc) {
+    lat_in_tile <- all(lat >= lat_n - 1 & lat <= lat_n)
+    lon_in_tile <- all(lon >= lon_w & lon <= lon_w + 1)
+    reversed <- nr > 1L && (all(diff(lat) > 0) || (lon_in_tile && all(diff(lon) < 0)))
+    if (!lat_in_tile || reversed) {
+      cli::cli_abort(paste("AG100 Geolocation/Latitude or Geolocation/Longitude has an",
+                           "unexpected extent or direction: lat/lon axes swapped?"))
+    }
+  }
   bounds <- .ag100_extent(lat, lon, lat_n, lon_w)
 
-  raw <- terra::values(r, mat = TRUE)
-  if (any(!is.na(raw) & (!is.finite(raw) | raw != trunc(raw)))) {
-    cli::cli_abort("AG100 band values must be integers.")
+  raw <- matrix(NA_real_, nr * nc, length(bands))
+  for (i in seq_along(bands)) {
+    path <- bands[[i]]
+    band <- if (i == 1L) first else read_dataset(path)
+    if (!identical(dim(band), c(nr, nc))) {
+      cli::cli_abort("Unexpected dimensions in AG100 dataset {.val {path}}.")
+    }
+    band[band == -9999] <- NA
+    if (any(!is.na(band) & (!is.finite(band) | band != trunc(band)))) {
+      cli::cli_abort("Values in AG100 dataset {.val {path}} must be integers.")
+    }
+    if (any(band < -2147483648 | band > 2147483647, na.rm = TRUE)) {
+      cli::cli_abort("Values in AG100 dataset {.val {path}} must fit in signed 32-bit integers.")
+    }
+    if (transposed) band <- t(band)
+    raw[, i] <- as.vector(t(band))
   }
-  if (any(raw < -2147483648 | raw > 2147483647, na.rm = TRUE)) {
-    cli::cli_abort("AG100 band values must fit in signed 32-bit integers.")
-  }
-  raw[raw == -9999] <- NA
+  r <- terra::rast(nrows = output_dim[1L], ncols = output_dim[2L], nlyrs = length(bands),
+                   extent = terra::ext(bounds), crs = "EPSG:4326")
   r <- terra::setValues(r, raw)
-  terra::ext(r) <- bounds
-  terra::crs(r) <- "EPSG:4326"
   names(r) <- names(bands)
 
   tmp_tif <- tempfile("ag100-", tmpdir = dirname(tif), fileext = ".tif")
@@ -273,7 +357,8 @@ fetch_aster_ged <- function(df, out_dir, src = NULL, keep_h5 = FALSE, overwrite 
   lat_step <- -diff(lat)
   lon_step <- diff(lon)
   if (!length(lat_step) || !length(lon_step) || any(lat_step <= 0) || any(lon_step <= 0)) {
-    cli::cli_abort("Invalid AG100 orientation: latitude must be decreasing and longitude increasing.")
+    cli::cli_abort(paste("Invalid AG100 orientation: Geolocation/Latitude must be decreasing",
+                         "and Geolocation/Longitude increasing."))
   }
   lat_res <- mean(lat_step)
   lon_res <- mean(lon_step)
@@ -281,7 +366,7 @@ fetch_aster_ged <- function(df, out_dir, src = NULL, keep_h5 = FALSE, overwrite 
   if (any(abs(lat_step - lat_res) > lat_res / 100) ||
       any(abs(lon_step - lon_res) > lon_res / 100) ||
       abs(lat_res - lon_res) > min(lat_res, lon_res) / 100) {
-    cli::cli_abort("AG100 coordinates must have a constant step on both axes.")
+    cli::cli_abort("AG100 Geolocation/Latitude and Geolocation/Longitude must have a constant step on both axes.")
   }
 
   west <- min(lon) - lon_res / 2
@@ -290,24 +375,22 @@ fetch_aster_ged <- function(df, out_dir, src = NULL, keep_h5 = FALSE, overwrite 
   south <- min(lat) - lat_res / 2
   if (abs(north - lat_n) > 1e-6 * length(lat) + 1e-9 || abs(west - lon_w) > lon_res / 10 ||
       abs(east - west - 1) > lon_res / 10 || abs(north - south - 1) > lat_res / 10) {
-    cli::cli_abort("AG100 extent does not match the expected one-degree tile at {lat_n}, {lon_w}.")
+    cli::cli_abort(paste("AG100 extent from Geolocation/Latitude and Geolocation/Longitude",
+                         "does not match the expected one-degree tile at {lat_n}, {lon_w}."))
   }
   c(west, east, south, north)
 }
 
-.ag100_coordinate <- function(r, nr, nc, axis, tol) {
-  coord <- terra::values(r, mat = FALSE)
-  latitude <- axis == "latitude"
-  expected <- if (latitude) nr else nc
-  if (any(!is.finite(coord))) cli::cli_abort("Invalid AG100 {axis} values.")
-  if (min(dim(r)[1:2]) == 1L && length(coord) == expected) return(coord)
-  if (!all(dim(r)[1:2] == c(nr, nc))) {
-    cli::cli_abort("Unexpected dimensions for AG100 {axis}.")
+.ag100_coordinate <- function(grid, dimensions, path, tol) {
+  latitude <- path == "Geolocation/Latitude"
+  expected <- dimensions[if (latitude) 1L else 2L]
+  if (min(dim(grid)) == 1L && length(grid) == expected) return(as.vector(grid))
+  if (!identical(dim(grid), dimensions)) {
+    cli::cli_abort("Unexpected dimensions for AG100 dataset {.val {path}}.")
   }
-  grid <- matrix(coord, nr, nc, byrow = TRUE)
   if (!latitude) grid <- t(grid)
   if (any(abs(grid - grid[, 1L]) > tol)) {
-    cli::cli_abort("AG100 {axis} must be constant across the other axis.")
+    cli::cli_abort("AG100 dataset {.val {path}} must be constant across the other axis.")
   }
   grid[, 1L]
 }

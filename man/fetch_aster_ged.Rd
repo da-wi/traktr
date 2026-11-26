@@ -24,7 +24,8 @@ Created if needed.}
 
 \item{src}{Optional directory searched recursively for local AG100 HDF5 files.}
 
-\item{keep_h5}{Whether to retain downloaded HDF5 files in \code{out_dir}.}
+\item{keep_h5}{Whether to retain downloaded HDF5 files in \code{out_dir},
+including when GeoTIFF conversion fails.}
 
 \item{overwrite}{Whether to replace existing GeoTIFFs.}
 

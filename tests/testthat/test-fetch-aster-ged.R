@@ -18,6 +18,31 @@ ag100_mock_urls <- function(tiles, use_cmr) {
   tiles
 }
 
+test_that("AG100 reads raw pixels from a rotated source in row order", {
+  dir <- withr::local_tempdir()
+  tif <- file.path(dir, "source & pixels.tif")
+  vrt <- file.path(dir, "rotated & scaled.vrt")
+  r <- terra::rast(nrows = 2L, ncols = 3L, vals = 1:6)
+  terra::writeRaster(r, tif, datatype = "INT4S")
+  writeLines(c(
+    '<VRTDataset rasterXSize="3" rasterYSize="2">',
+    '  <GeoTransform>0,0,0.001,40,-0.001,0</GeoTransform>',
+    '  <VRTRasterBand dataType="Int32" band="1">',
+    '    <Scale>10</Scale>',
+    '    <Offset>100</Offset>',
+    '    <SimpleSource>',
+    '      <SourceFilename relativeToVRT="1">source &amp; pixels.tif</SourceFilename>',
+    '      <SourceBand>1</SourceBand>',
+    '    </SimpleSource>',
+    '  </VRTRasterBand>',
+    '</VRTDataset>'
+  ), vrt)
+
+  expect_warning(terra::rast(vrt), "rotated")
+  expect_no_warning(result <- .ag100_read_array(vrt))
+  expect_equal(result, matrix(1:6, nrow = 2L, byrow = TRUE))
+})
+
 test_that("AG100 conversion preserves band order, georeferencing and raw values", {
   ag100_skip_without_hdf5()
   tif <- withr::local_tempfile(fileext = ".tif")
@@ -37,6 +62,66 @@ test_that("AG100 conversion preserves band order, georeferencing and raw values"
   ), "orientation|decreasing")
   expect_error(.ag100_h5_to_tif(ag100_fixture(), tif, 41, -105), "extent")
   expect_equal(unname(as.vector(terra::ext(terra::rast(tif)))), c(-105, -104, 39, 40))
+})
+
+test_that("AG100 transposes both band and coordinate arrays in a transposed layout", {
+  ag100_skip_without_hdf5()
+  original <- withr::local_tempfile(fileext = ".tif")
+  transposed <- withr::local_tempfile(fileext = ".tif")
+  .ag100_h5_to_tif(ag100_fixture(), original, 40, -105)
+  read_array <- .ag100_read_array
+  local_mocked_bindings(.ag100_read_array = function(address) t(read_array(address)))
+
+  expect_message(.ag100_h5_to_tif(ag100_fixture(), transposed, 40, -105), "transposed layout")
+  r <- terra::rast(original)
+  s <- terra::rast(transposed)
+  expect_equal(as.vector(terra::ext(s)), as.vector(terra::ext(r)))
+  expect_identical(terra::values(s), terra::values(r))
+})
+
+test_that("AG100 masks the HDF5 dataset's declared fill value", {
+  ag100_skip_without_hdf5()
+  h5 <- ag100_fixture(file.path("nodata", "AG100.v003.40.-105.0001.h5"))
+  tif <- withr::local_tempfile(fileext = ".tif")
+  .ag100_h5_to_tif(h5, tif, 40, -105)
+  values <- terra::values(terra::rast(tif))
+
+  expect_true(is.na(values[1L, "elev"]))
+  expect_equal(unname(values[2L, "elev"]), 1512)
+  expect_equal(unname(values[1L, "ndvi_mean"]), 302)
+  expect_true(all(is.na(values[c(87, 88, 107, 108), ])))
+})
+
+test_that("AG100 diagnoses swapped one-dimensional coordinates on a square tile", {
+  ag100_skip_without_hdf5()
+  tif <- withr::local_tempfile(fileext = ".tif")
+  read_array <- .ag100_read_array
+  local_mocked_bindings(.ag100_read_array = function(address) {
+    if (endsWith(address, "/Latitude")) {
+      address <- sub("/Latitude$", "/Longitude", address)
+    } else if (endsWith(address, "/Longitude")) {
+      address <- sub("/Longitude$", "/Latitude", address)
+    }
+    read_array(address)
+  })
+  expect_error(.ag100_h5_to_tif(ag100_fixture("AG100.v003.05.-075.0001.h5"), tif, 5, -75),
+               "lat/lon axes swapped")
+})
+
+test_that("AG100 diagnoses reversed square coordinate vectors within the tile bounds", {
+  ag100_skip_without_hdf5()
+  tif <- withr::local_tempfile(fileext = ".tif")
+  lat <- c(39.25, 39.75)
+  lon <- c(39.75, 39.25)
+  local_mocked_bindings(.ag100_read_array = function(address) {
+    if (endsWith(address, "/Latitude")) return(matrix(lat, nrow = 1L))
+    if (endsWith(address, "/Longitude")) return(matrix(lon, nrow = 1L))
+    matrix(1:4, nrow = 2L)
+  })
+  expect_error(.ag100_h5_to_tif(ag100_fixture(), tif, 40, 39), "lat/lon axes swapped\\?")
+  lat <- rev(lat)
+  expect_error(.ag100_h5_to_tif(ag100_fixture(), tif, 40, 39), "lat/lon axes swapped\\?")
+  expect_false(file.exists(tif))
 })
 
 test_that("AG100 accepts float32 coordinate rounding and rejects an irregular step", {
@@ -158,7 +243,7 @@ test_that("a failed keep_h5 rename warns but keeps the tile consistent with its 
   expect_length(list.files(out, "^ag100-.*\\.h5$"), 0L)
 })
 
-test_that("AG100 keeps the previous HDF5 when a staged download fails conversion", {
+test_that("AG100 keeps both HDF5 files when a replacement fails conversion", {
   ag100_skip_without_hdf5()
   out <- withr::local_tempdir()
   kept <- file.path(out, "ag100_v003_40_-105.h5")
@@ -177,9 +262,43 @@ test_that("AG100 keeps the previous HDF5 when a staged download fails conversion
                           overwrite = TRUE, progress = FALSE),
     "ASTER GED tile .* failed"
   )
-  expect_identical(attr(df, "aster_ged_tiles")$status, "error")
+  index <- attr(df, "aster_ged_tiles")
+  expect_identical(index$status, "error")
   expect_identical(readBin(kept, "raw", n = file.size(kept)), original)
-  expect_identical(list.files(out), basename(kept))
+  failed <- list.files(out, "^ag100_v003_40_-105-failed-.*\\.h5$")
+  expect_length(failed, 1L)
+  expect_match(index$message, failed, fixed = TRUE)
+  expect_identical(readBin(file.path(out, failed), "raw", n = 22L),
+                   c(original[1:8], charToRaw("truncated HDF5")))
+})
+
+test_that("AG100 retains a downloaded HDF5 after failed conversion only on request", {
+  ag100_skip_without_hdf5()
+  bad <- ag100_fixture(file.path("bad", "AG100.v003.40.-105.0001.h5"))
+  local_mocked_bindings(
+    .ag100_resolve = ag100_mock_urls,
+    .earthdata_handle = function() "dummy",
+    .ag100_download = function(url, dest_h5, handle) file.copy(bad, dest_h5)
+  )
+  out <- withr::local_tempdir()
+  for (keep in c(FALSE, TRUE)) {
+    expect_warning(
+      df <- fetch_aster_ged(ag100_fetch_aoi(), out, keep_h5 = keep, progress = FALSE),
+      "Geolocation/Latitude"
+    )
+    index <- attr(df, "aster_ged_tiles")
+    expect_identical(index$status, "error")
+    expect_identical(index$file, NA_character_)
+    files <- list.files(out)
+    if (keep) {
+      expect_identical(files, "ag100_v003_40_-105.h5")
+      expect_match(index$message, files, fixed = TRUE)
+      expect_identical(unname(tools::md5sum(file.path(out, files))), unname(tools::md5sum(bad)))
+    } else {
+      expect_length(files, 0L)
+      expect_no_match(index$message, "retained")
+    }
+  }
 })
 
 test_that("the AG100 download wrapper stages success and removes partial files", {

@@ -72,6 +72,18 @@ test_that("Earthdata curl handles use a bearer header or netrc and a cookie jar"
                                  unrestricted_auth = 1L, cookiefile = jar, cookiejar = jar))
 })
 
+test_that("Earthdata mentions project Renviron precedence when the file exists", {
+  withr::local_dir(withr::local_tempdir())
+  withr::local_envvar(c(EARTHDATA_TOKEN = "", EARTHDATA_NETRC = "missing-netrc"))
+  messages <- capture.output(earthdata_auth_check(), type = "message")
+  expect_no_match(paste(messages, collapse = "\n"), "takes precedence")
+  expect_error(.earthdata_handle(), "EARTHDATA_TOKEN")
+
+  expect_true(file.create(".Renviron"))
+  expect_message(earthdata_auth_check(), "takes precedence")
+  expect_error(.earthdata_handle(), "takes precedence")
+})
+
 test_that("Earthdata matches netrc hostnames case-insensitively", {
   netrc <- withr::local_tempfile()
   withr::local_envvar(c(EARTHDATA_TOKEN = "", EARTHDATA_NETRC = netrc))
