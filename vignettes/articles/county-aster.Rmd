@@ -1,0 +1,120 @@
+---
+title: "ASTER 100 m summaries for US counties"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{ASTER 100 m summaries for US counties}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+Use a list of county FIPS codes to summarise the **ASTER Global Emissivity Dataset
+(AG100 v003, 100 m)**. traktr loads the county boundaries, fetches the tiles they
+intersect and exports area-weighted statistics with a data dictionary and
+provenance report.
+
+## Earthdata Login
+
+AG100 is distributed by NASA LP DAAC. Store an Earthdata Login user token as
+`EARTHDATA_TOKEN` in `~/.Renviron` and restart R, or configure an Earthdata Login
+entry for `urs.earthdata.nasa.gov` in `~/.netrc`. The offline check reports the
+detected method without printing credentials.
+[Earthdata Login](https://urs.earthdata.nasa.gov/)
+
+```{r auth, eval = FALSE}
+library(traktr)
+earthdata_auth_check()
+```
+
+## Read the FIPS list
+
+The input CSV has a header and a column of county FIPS codes. Change `col` if
+the column is named differently. `read_fips_csv()` pads the codes to five digits
+and warns when it removes missing or duplicate entries.
+
+```{r fips, eval = FALSE}
+fips <- read_fips_csv("fips.csv", col = "x")
+```
+
+## Load county boundaries
+
+`aoi_us_counties()` loads the US Census cartographic boundary file at the selected
+vintage and scale. Each row is a county or county equivalent keyed by `GEOID`.
+The county polygons are stored as an area-of-interest attribute. The function
+reports requested codes absent from the boundary file.
+
+```{r counties, eval = FALSE}
+cty <- aoi_us_counties(fips = fips, year = 2020, resolution = "500k")
+names(cty)
+#> GEOID STATEFP COUNTYFP NAME NAMELSAD STUSPS ALAND AWATER region
+```
+
+## Fetch ASTER tiles
+
+`fetch_aster_ged()` requests only the 1° tiles that intersect the county polygons.
+It converts each HDF5 granule to a GeoTIFF containing `elev`, `ndvi_mean`,
+`ndvi_sd`, `temp_mean`, `temp_sd`, `lwm` and `nobs`. Rerun with the same output
+directory to reuse existing GeoTIFFs.
+
+```{r fetch, eval = FALSE}
+cty <- fetch_aster_ged(cty, out_dir = "data/ag100")
+attr(cty, "aster_ged_tiles")[, c("tile_id", "status", "size_bytes")]
+```
+
+## Summarise per county
+
+```{r attach, eval = FALSE}
+cty <- attach_aster_ged(cty, naming = "county")
+cty[, c("GEOID", "NAME",
+        "ASTER_county_elevation_mean", "ASTER_county_elevation_sd",
+        "ASTER_ndvi_mean_mean", "ASTER_temp_mean_mean",
+        "ASTER_lwm_water_perc", "county_area_km2_geodesic")]
+```
+
+Values default to the raw AG100 units, including NDVI × 100 and temperature in
+centikelvin. With `convert = TRUE`, NDVI is divided by 100 and mean temperatures
+are converted to degrees Celsius. Temperature standard deviations are converted
+to kelvin.
+
+### What the statistics mean
+
+Each intersecting 100 m cell in the county contributes according to its area
+inside the polygon. Standard deviations use the area-weighted population formula.
+`missing_perc` is the percentage of tile-covered area without a valid value. It
+is zero when all covered values are valid and `NA` when there is no tile coverage.
+
+- Elevation `cin` is the percentage of valid area at exactly zero metres.
+  Land/water `cin` is the percentage of tile-covered area with a valid value.
+- The observation flag `lt_4` indicates an area-weighted mean below four.
+- Elevation `sum` is `NA` in polygon mode.
+
+ecolo-zip samples points in a spiderweb pattern. County summaries use raster
+cells across the whole polygon. As county area increases, elevation SD and the
+range from minimum to maximum tend to grow. Use `county_area_km2_geodesic` as a
+covariate. Set `naming = "ecolozip"` to use the column names expected by older
+scripts.
+
+### Parallel processing and resuming
+
+For larger runs, set a parallel `future::plan()` and pass `workers` to
+`attach_aster_ged()`. The package leaves the future plan to the caller.
+By default, extraction caches per-tile moments in `_moments/` inside the tile
+directory. Rerunning the same extraction computes only the missing moments.
+
+```{r parallel, eval = FALSE}
+future::plan(future::multisession, workers = 4)
+cty <- attach_aster_ged(cty, workers = 4)
+```
+
+## Save the result
+
+```{r write, eval = FALSE}
+write_county_summary(cty, path = "output/us_counties_aster_2020")
+```
+
+This creates `us_counties_aster_2020.csv`,
+`us_counties_aster_2020_dictionary.csv` and
+`us_counties_aster_2020_PROVENANCE.md`. The CSV quotes `GEOID` as a string.
+Import it as character to retain leading zeros. The dictionary records column
+definitions, units and ecolo-zip names. The provenance report records the
+boundary vintage, retrieval time and tile checksums. Add `"parquet"` to
+`formats` to also export Parquet when `nanoparquet` is installed.

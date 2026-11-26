@@ -62,3 +62,7 @@ reference:
       Aggregate exposures per group
     contents:
       - summarize_exposure
+
+  - title: "Export"
+    contents:
+      - write_county_summary

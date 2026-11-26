@@ -90,11 +90,25 @@ ggplot(hex, aes(fill = ndvi_mean))+
 
 ![](man/figures/README-plot01.png)
 
+## US county summaries (ASTER GED)
+
+``` r
+library(traktr)
+fips <- read_fips_csv("fips.csv", col = "x")
+counties <- aoi_us_counties(fips, year = 2020)
+counties <- fetch_aster_ged(counties, out_dir = "data/ag100")
+counties <- attach_aster_ged(counties)
+write_county_summary(counties, "output/us_counties_aster_2020")
+```
+
+See [ASTER 100 m summaries for US counties](https://da-wi.github.io/traktr/articles/county-aster.html).
+
 ## System requirements
 
 - R ≥ 4.2
 - For fetching Sentinel-2 data: [CDSE
   account](https://dataspace.copernicus.eu/).
+- AG100 downloads require an [Earthdata Login](https://urs.earthdata.nasa.gov/).
 - Optional: GPS_SMB_ROOT for your CSV data directory.
 
 ## Documentation
@@ -103,8 +117,10 @@ See the “Getting started” guide.
 
 ## Citation
 
-Please cite `traktr` and data sources (Sentinel-2, ESA WorldCover) in
-publications.
+Please cite `traktr` and the data sources used in your publication. For county
+summaries, cite the ASTER Global Emissivity Dataset (AG100 v003, Hulley et al.,
+NASA LP DAAC) and the US Census Bureau cartographic boundary files. For GPS
+workflows, cite Sentinel-2 and ESA WorldCover as applicable.
 
 ``` r
 citation("traktr")
