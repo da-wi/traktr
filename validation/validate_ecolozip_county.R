@@ -303,7 +303,7 @@ writeLines(c(
   "- traktr weights ASTER cells by area across county polygons. ecolo-zip samples 140 spiderweb points within 20 miles of ZIP centroids, concentrating coverage near population centers.",
   "- The modifiable areal unit problem (MAUP) affects SD and maxima. County polygons cover more terrain and can capture GDEM sinks, so elevation minima are excluded.",
   "- Elevation sums are excluded because the traktr polygon output leaves them missing and totals depend on sampling support.",
-  "- ecolo-zip reports elevation in Hawaii. The comparison excludes Hawaii from elevation metrics because traktr has missing elevation values there.",
+  "- Neither ecolo-zip nor traktr has ASTER elevation for Hawaii (all 137 Hawaii ZIPs are missing in ecolo-zip), so Hawaii is excluded from elevation metrics.",
   "- ecolo-zip uses historical Connecticut counties and traktr uses Census 2022 planning regions. Other boundary vintages can leave unmatched GEOIDs, including changes in Alaska and Virginia.",
   "- Missing percentages are excluded. ecolo-zip counts missing sampled points and can report NA instead of zero. traktr measures missing area, including area outside granule coverage.",
   "- Granule inventories differ between the ecolo-zip 2021 retrieval and the traktr 2026 retrieval of ASTER GED v003. This can affect observation counts and NDVI."
