@@ -245,6 +245,57 @@ test_that("attachment uses the AOI override recorded by fetch", {
   expect_identical(attr(out, "traktr_layers")$aster_ged_summary$index$tile_id, "5.-75")
 })
 
+test_that("unavailable nominal tiles contribute missing area to every band", {
+  x <- aster_summary_data(withr::local_tempdir())
+  attr(x, "aster_ged_aoi") <- sf::st_sf(
+    id = x$id, geometry = c(aster_summary_polygon(0.5, 1.5, 0.1, 0.9),
+                              aster_summary_polygon(1.25, 1.75, 0.1, 0.9))
+  )
+  available <- transform(attr(x, "aster_ged_tiles"), tile_id = "1.0", lat_n = 1L, lon_w = 0L)
+  attr(x, "aster_ged_tiles") <- available
+  attr(x, "aster_ged_map") <- data.frame(aoi_id = c("a", "a", "b"), tile_id = c("1.0", "1.1", "1.1"))
+  summarize <- function(df, ...) attach_aster_ged(df, naming = "traktr", progress = FALSE, ...)
+  covered <- summarize(x)
+  missing <- transform(available, tile_id = "1.1", lon_w = 1L, file = NA_character_,
+                       status = "missing_remote")
+  attr(x, "aster_ged_tiles") <- rbind(available, missing)
+  expect_no_warning(out <- summarize(x))
+  missing_cols <- endsWith(names(out), "missing_perc")
+  expect_equal(as.numeric(out[1L, missing_cols]), c(75, 50, 50, 50, 50, 75), tolerance = 0.005)
+  expect_true(all(out[2L, missing_cols] == 100))
+  expect_equal(out$aster_lwm_cin, 100 - out$aster_lwm_missing_perc)
+  retained <- !missing_cols & names(out) != "aster_lwm_cin"
+  expect_identical(out[retained], covered[retained], ignore_attr = TRUE)
+  expect_equal(out$aster_elev_mean, c(8, NA))
+  expect_identical(out$aster_nobs_lt_4[2L], NA_integer_)
+  expect_equal(out$aster_n_cells[2L], 0)
+  expect_identical(summarize(x, ecolozip_na_quirk = TRUE)[missing_cols], out[missing_cols],
+                   ignore_attr = TRUE)
+
+  for (status in c("missing_local", "error")) {
+    missing$status <- status
+    attr(x, "aster_ged_tiles") <- rbind(available, missing)
+    expect_error(summarize(x), "Unavailable ASTER GED tiles:.*1.1")
+    expect_warning(skipped <- summarize(x, allow_missing = TRUE), "Unavailable ASTER GED tiles:.*1.1")
+    expect_identical(skipped[missing_cols], out[missing_cols], ignore_attr = TRUE)
+  }
+})
+
+test_that("geodesic area in a missing antimeridian tile matches the split AOI", {
+  withr::local_options(list(sf_use_s2 = FALSE))
+  ring <- rbind(c(179.4, 51.25), c(-179.7, 51.25), c(-179.7, 51.75),
+                c(179.4, 51.75), c(179.4, 51.25))
+  unsplit <- sf::st_sfc(sf::st_polygon(list(ring)), crs = 4326)
+  east <- aster_summary_polygon(-180, -179.7, 51.25, 51.75)
+  split <- sf::st_combine(c(aster_summary_polygon(179.4, 180, 51.25, 51.75), east))
+  aoi <- sf::st_sf(id = c("unsplit", "split"), geometry = c(unsplit, split))
+  tiles <- data.frame(tile_id = "52.-180")
+  map <- data.frame(aoi_id = aoi$id, tile_id = tiles$tile_id)
+  expect_equal(.aster_ged_uncovered_area(aoi, aoi$id, tiles, map),
+               rep(.aster_ged_area(east) * 1e6, 2), tolerance = 1e-9)
+  expect_false(sf::sf_use_s2())
+})
+
 test_that("AG100 fetch and attach agree for split and unsplit antimeridian polygons", {
   dir <- withr::local_tempdir()
   src <- withr::local_tempdir()
@@ -322,7 +373,8 @@ test_that("the join preserves repeated IDs, row order, attributes and geometry",
   expect_identical(layer$params, list(
     bands = c("elev", "ndvi_mean", "ndvi_sd", "temp_mean", "temp_sd", "lwm", "nobs"),
     naming = "county", extras = c("median", "n_cells", "area"),
-    convert = FALSE, ecolozip_na_quirk = FALSE
+    convert = FALSE, ecolozip_na_quirk = FALSE,
+    unavailable = data.frame(tile_id = character(), status = character())
   ))
   expect_identical(attach_aster_ged(out, progress = FALSE), out)
 })

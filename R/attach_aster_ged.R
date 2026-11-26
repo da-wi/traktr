@@ -33,13 +33,15 @@
 #' including any AOI override. Older fetch results use the original traktr AOI.
 #' Rows whose ID is absent from the AOI receive `NA` for all summary columns.
 #'
-#' Standard deviations use the area-weighted population formula. Missing
-#' percentages refer to the area covered by available tiles and are `NA`
-#' where there is no coverage. Elevation `cin` measures the percentage of
-#' valid area at exactly zero metres. Elevation `sum` is always `NA` in
-#' polygon mode. The observation flag `lt_4` marks a mean below four.
+#' Standard deviations use the area-weighted population formula. `missing_perc`
+#' includes county area in tiles without an AG100 granule and area in local
+#' tiles skipped with `allow_missing = TRUE`. It is 100 where all mapped area
+#' is missing and `NA` where no area was measured. Elevation `cin` measures
+#' the percentage of valid area at exactly zero metres. Elevation `sum` is
+#' always `NA` in polygon mode. The observation flag `lt_4` marks a mean below four.
 #' Land/water summaries report the percentage of valid area classified as
-#' water and, as `cin`, the percentage of covered area with valid values.
+#' water and, as `cin`, 100 minus the missing percentage before applying
+#' `ecolozip_na_quirk`.
 #' Existing columns with the selected statistic names are refreshed.
 #'
 #' @return Invisibly, `df` with the selected statistics and an
@@ -83,17 +85,21 @@ attach_aster_ged <- function(df,
 
   aoi <- aoi[aoi[[id_col]] %in% df[[id_col]], , drop = FALSE]
   map <- map[map$aoi_id %in% aoi[[id_col]], , drop = FALSE]
-  tiles <- tiles[tiles$tile_id %in% map$tile_id & !(tiles$status %in% "missing_remote"),
-                 , drop = FALSE]
+  tiles <- tiles[tiles$tile_id %in% map$tile_id, , drop = FALSE]
+  remote_missing <- tiles$status %in% "missing_remote"
   missing <- tiles$status %in% c("error", "missing_local") |
     !file.exists(tiles$file) | dir.exists(tiles$file)
-  if (any(missing)) {
-    missing_ids <- tiles$tile_id[missing]
+  if (any(missing & !remote_missing)) {
+    missing_ids <- tiles$tile_id[missing & !remote_missing]
     msg <- "Unavailable ASTER GED tiles: {.val {missing_ids}}."
     if (!isTRUE(allow_missing)) cli::cli_abort(msg)
     cli::cli_warn(msg)
   }
-  tiles <- tiles[!missing, , drop = FALSE]
+  unavailable <- tiles[remote_missing | missing, , drop = FALSE]
+  # Record the status at extraction time: a fetched tile whose file is gone is missing_local
+  vanished <- !unavailable$status %in% c("missing_remote", "missing_local", "error")
+  unavailable$status[vanished] <- "missing_local"
+  tiles <- tiles[!(remote_missing | missing), , drop = FALSE]
 
   cache_dir <- NULL
   if (isTRUE(cache) && nrow(tiles)) {
@@ -123,6 +129,14 @@ attach_aster_ged <- function(df,
   moments <- .extract_tiled(aoi, id_col, extraction_tiles, map, layers = layers, workers = workers,
                             cache_dir = cache_dir, progress = progress)
   ids <- aoi[[id_col]]
+  if (nrow(unavailable)) {
+    uncovered <- .aster_ged_uncovered_area(aoi, ids, unavailable, map)
+    for (i in which(uncovered > 0)) {
+      for (band in layers) {
+        moments[[i]][[band]]$w_na <- moments[[i]][[band]]$w_na + uncovered[i]
+      }
+    }
+  }
   stats <- data.frame(ids = ids[!duplicated(ids)], check.names = FALSE)
   names(stats) <- id_col
   summaries <- lapply(layers, function(band) {
@@ -150,9 +164,37 @@ attach_aster_ged <- function(df,
   out <- .join_stats(df, stats, by = id_col, prefix = "")
   out <- .set_traktr_layer(out, "aster_ged_summary", tiles, params = list(
     bands = bands, naming = naming, extras = extras, convert = convert,
-    ecolozip_na_quirk = ecolozip_na_quirk
+    ecolozip_na_quirk = ecolozip_na_quirk,
+    unavailable = as.data.frame(unavailable)[, c("tile_id", "status"), drop = FALSE]
   ))
   invisible(out)
+}
+
+.aster_ged_uncovered_area <- function(aoi, ids, tiles, map) {
+  if (!all(c("lat_n", "lon_w") %in% names(tiles))) {
+    # Older indexes may only record the coordinates in the tile ID.
+    coords <- utils::strcapture("^(-?[0-9]+)\\.(-?[0-9]+)$", tiles$tile_id,
+                                list(lat_n = integer(), lon_w = integer()))
+    tiles$lat_n <- coords$lat_n
+    tiles$lon_w <- coords$lon_w
+  }
+  previous_s2 <- getOption("sf_use_s2")
+  on.exit(options(sf_use_s2 = previous_s2), add = TRUE)
+  suppressMessages(sf::sf_use_s2(TRUE))
+  # Keep every part when the clipping helper splits mixed AOIs at the dateline.
+  geometry <- sf::st_cast(sf::st_geometry(sf::st_transform(aoi, 4326)), "MULTIPOLYGON")
+  tile_ids <- split(map$aoi_id, map$tile_id)
+  area <- numeric(length(ids))
+  has_box <- tiles$lat_n > -90 & tiles$lat_n <= 90 & tiles$lon_w >= -180 & tiles$lon_w < 180
+  for (i in which(has_box)) {
+    rows <- which(ids %in% tile_ids[[as.character(tiles$tile_id[i])]])
+    lon <- tiles$lon_w[i]
+    lat <- tiles$lat_n[i]
+    clipped <- .clip_tile_polygons(geometry[rows], c(lon, lon + 1, lat - 1, lat))
+    rows <- rows[clipped$index]
+    area[rows] <- area[rows] + as.numeric(sf::st_area(clipped$polys))
+  }
+  as.numeric(rowsum(area, match(ids, unique(ids)), reorder = FALSE))
 }
 
 # Confirmed on tile 40.-105 (smoke run 2, 2026-11-26).

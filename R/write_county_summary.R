@@ -228,6 +228,23 @@ write_county_summary <- function(df, path, formats = "csv", dictionary = TRUE, p
                       ifelse(is.na(size), "", format(size, trim = TRUE, scientific = FALSE)),
                       " | ", md5, " |", recycle0 = TRUE)
 
+  index <- layers$aster_ged$index
+  unavailable <- as.data.frame(index)[index$status %in% c("missing_remote", "missing_local", "error"),
+                                      c("tile_id", "status"), drop = FALSE]
+  # Tiles found missing at extraction time take precedence over the fetch status
+  at_attach <- layers$aster_ged_summary$params$unavailable
+  if (!is.null(at_attach) && nrow(at_attach)) {
+    unavailable <- unavailable[!unavailable$tile_id %in% at_attach$tile_id, , drop = FALSE]
+    unavailable <- rbind(unavailable, at_attach[, c("tile_id", "status")])
+  }
+  map <- attr(df, "aster_ged_map", exact = TRUE)
+  aoi_by_tile <- if (!is.null(map)) split(map$aoi_id, map$tile_id)
+  affected <- vapply(as.character(unavailable$tile_id), function(tile_id) {
+    paste(unique(aoi_by_tile[[tile_id]]), collapse = ", ")
+  }, character(1))
+  unavailable_rows <- paste0("| ", unavailable$tile_id, " | ", unavailable$status,
+                             " | ", affected, " |", recycle0 = TRUE)
+
   c(
     "# ASTER GED county summary provenance", "",
     paste0("- traktr version: ", utils::packageVersion("traktr")),
@@ -247,6 +264,10 @@ write_county_summary <- function(df, path, formats = "csv", dictionary = TRUE, p
     "", "## Tiles used", "",
     "| Tile ID | Status | File | Size (bytes) | MD5 |",
     "| --- | --- | --- | ---: | --- |",
-    tile_rows
+    tile_rows,
+    "", "## Tiles without data", "",
+    "| Tile ID | Status | Affected AOI IDs |",
+    "| --- | --- | --- |",
+    unavailable_rows
   )
 }

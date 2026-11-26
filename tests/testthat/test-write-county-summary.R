@@ -62,6 +62,11 @@ test_that("the dictionary covers every column and follows naming and units", {
     expect_identical(dict$source[dict$name == "ALAND"], "US Census cartographic boundary 2020")
     expect_identical(dict$unit[dict$name == "ALAND"], "m\u00b2")
     expect_identical(dict$ecolozip_name[dict$name == "aster_elev_mean"], "ASTER_zip_elevation_mean")
+    expect_true(all(grepl("ASTER GDEM artefacts (pits near water bodies); prefer mean/median",
+                          dict$description[dict$name %in% c("aster_elev_min", "aster_elev_max")],
+                          fixed = TRUE)))
+    expect_true(all(grepl("includes county area in tiles without an AG100 granule",
+                          dict$description[dict$stat %in% "missing_perc"], fixed = TRUE)))
     ndvi <- dict[dict$name == "aster_ndvi_mean_mean", ]
     expect_identical(ndvi$source, "ASTER GED AG100 v003")
     expect_identical(ndvi$band, "ndvi_mean")
@@ -95,6 +100,30 @@ test_that("provenance describes the used tiles without exporting local paths", {
                        dictionary = FALSE, overwrite = TRUE)
   expect_true(any(grepl("^\\| 1\\.0 \\| converted \\| ag100\\.tif \\| [0-9]+ \\|  \\|$",
                         readLines(paths[["provenance"]]))))
+})
+
+test_that("provenance lists tiles without data from the fetch index", {
+  dir <- withr::local_tempdir()
+  df <- county_export_fixture(dir)
+  fetch <- attr(df, "traktr_layers")$aster_ged
+  unavailable <- data.frame(tile_id = c("1.1", "1.2", "1.3"),
+                            status = c("missing_remote", "missing_local", "error"),
+                            file = NA_character_, size_bytes = NA_real_)
+  df <- .set_traktr_layer(df, "aster_ged", rbind(fetch$index, unavailable), fetch$params)
+  attr(df, "aster_ged_map") <- rbind(attr(df, "aster_ged_map"), data.frame(
+    aoi_id = c("01001", "01003", "01001"), tile_id = "1.1"
+  ))
+  stem <- file.path(dir, "summary")
+  paths <- write_county_summary(df, stem, formats = character(), dictionary = FALSE)
+  provenance <- readLines(paths[["provenance"]])
+  expect_true("## Tiles without data" %in% provenance)
+  expect_true("| 1.1 | missing_remote | 01001, 01003 |" %in% provenance)
+  expect_true("| 1.2 | missing_local |  |" %in% provenance)
+  expect_true("| 1.3 | error |  |" %in% provenance)
+
+  attr(df, "aster_ged_map") <- NULL
+  write_county_summary(df, stem, formats = character(), dictionary = FALSE, overwrite = TRUE)
+  expect_true("| 1.1 | missing_remote |  |" %in% readLines(paths[["provenance"]]))
 })
 
 test_that("existing outputs abort before any files are published", {
@@ -225,4 +254,20 @@ test_that("rollback keeps an earlier output that a concurrent export replaced", 
 
   expect_error(write_county_summary(df, stem), "Could not publish.*result_dictionary")
   expect_identical(readLines(csv), "other export")
+})
+
+test_that("provenance reports tiles that vanished between fetch and attach", {
+  dir <- withr::local_tempdir()
+  df <- county_export_fixture(dir)
+  unlink(file.path(dir, "ag100.tif"))
+  expect_warning(
+    df <- attach_aster_ged(df, bands = c("elev", "ndvi_mean"), allow_missing = TRUE,
+                           progress = FALSE, cache = FALSE),
+    "Unavailable ASTER GED tiles"
+  )
+  expect_equal(df$ASTER_county_elevation_missing_perc, 100)
+  paths <- write_county_summary(df, file.path(dir, "summary"), formats = character(),
+                                dictionary = FALSE)
+  provenance <- readLines(paths[["provenance"]])
+  expect_true("| 1.0 | missing_local | 01001 |" %in% provenance)
 })

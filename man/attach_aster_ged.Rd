@@ -66,13 +66,15 @@ Extraction and geodesic area use the AOI recorded by \code{\link[=fetch_aster_ge
 including any AOI override. Older fetch results use the original traktr AOI.
 Rows whose ID is absent from the AOI receive \code{NA} for all summary columns.
 
-Standard deviations use the area-weighted population formula. Missing
-percentages refer to the area covered by available tiles and are \code{NA}
-where there is no coverage. Elevation \code{cin} measures the percentage of
-valid area at exactly zero metres. Elevation \code{sum} is always \code{NA} in
-polygon mode. The observation flag \code{lt_4} marks a mean below four.
+Standard deviations use the area-weighted population formula. \code{missing_perc}
+includes county area in tiles without an AG100 granule and area in local
+tiles skipped with \code{allow_missing = TRUE}. It is 100 where all mapped area
+is missing and \code{NA} where no area was measured. Elevation \code{cin} measures
+the percentage of valid area at exactly zero metres. Elevation \code{sum} is
+always \code{NA} in polygon mode. The observation flag \code{lt_4} marks a mean below four.
 Land/water summaries report the percentage of valid area classified as
-water and, as \code{cin}, the percentage of covered area with valid values.
+water and, as \code{cin}, 100 minus the missing percentage before applying
+\code{ecolozip_na_quirk}.
 Existing columns with the selected statistic names are refreshed.
 }
 \examples{

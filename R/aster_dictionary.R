@@ -32,7 +32,7 @@
     sd = "Area-weighted population standard deviation of valid cells.",
     cin = "Share of valid area at exactly zero metres.",
     sum = "Always NA in polygon mode because the point sum depends on the sample size.",
-    missing_perc = "Share of tile-covered area with missing values.",
+    missing_perc = "Share of area with missing values; includes county area in tiles without an AG100 granule.",
     lt_4 = "One if the area-weighted mean observation count is below four, zero otherwise.",
     perc = "Water share of valid area.",
     median = "Area-weighted median of valid cells."
@@ -48,13 +48,18 @@
     if (isTRUE(convert) && band == "temp_mean") unit[stat == "sd"] <- "K"
 
     description <- unname(descriptions[stat])
-    if (band == "lwm") description[stat == "cin"] <- "Share of tile-covered area with valid values."
+    if (band == "lwm") description[stat == "cin"] <- "Share of area with valid values (100 minus the missing percentage)."
     if (band == "elev") {
       affected <- stat %in% c("min", "max", "sd")
       description[affected] <- paste(
         description[affected],
         "Sensitive to county size (MAUP). Elevation range and spread tend to grow with",
         "county area. Use county_area_km2_geodesic as a covariate."
+      )
+      extremes <- stat %in% c("min", "max")
+      description[extremes] <- paste(
+        description[extremes],
+        "Sensitive to ASTER GDEM artefacts (pits near water bodies); prefer mean/median."
       )
     }
     row(band, stat, extra, county, ecolozip, traktr, unit, description)
