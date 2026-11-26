@@ -155,6 +155,7 @@
 #' @param id_col Column name containing AOI identifiers.
 #' @param deduplicate Logical. If \code{TRUE}, geometrically identical AOIs
 #'   are deduplicated before extraction.
+#' @param to_wgs84 Transform the AOIs to EPSG:4326 before deduplication.
 #'
 #' @return A list with:
 #' \itemize{
@@ -164,34 +165,34 @@
 #'
 #' @rdname aoi-helpers
 #' @noRd
-.aoi_deduplicate <- function(aoi, id_col, deduplicate = TRUE) {
+.aoi_deduplicate <- function(aoi, id_col, deduplicate = TRUE, to_wgs84 = TRUE) {
   by_h3 <- identical(id_col, "h3") && "h3" %in% names(aoi)
   if ((deduplicate && !by_h3) || !isTRUE(all(sf::st_is_valid(aoi)))) {
     aoi <- sf::st_make_valid(aoi)
   }
-  aoi4326 <- if (isTRUE(sf::st_crs(aoi)$epsg == 4326L)) aoi else sf::st_transform(aoi, 4326)
+  if (to_wgs84 && !isTRUE(sf::st_crs(aoi)$epsg == 4326L)) aoi <- sf::st_transform(aoi, 4326)
   
   if (by_h3) {
     # H3 cells are intrinsically unique by id
-    aoi_unique <- aoi4326[!duplicated(aoi4326$h3), , drop = FALSE]
+    aoi_unique <- aoi[!duplicated(aoi$h3), , drop = FALSE]
     aoi_unique$.aoi_row <- seq_len(nrow(aoi_unique))
-    map_back <- sf::st_drop_geometry(aoi4326)[, c(id_col), drop = FALSE]
+    map_back <- sf::st_drop_geometry(aoi)[, c(id_col), drop = FALSE]
     map_back$.aoi_row <- match(map_back[[id_col]], aoi_unique[[id_col]])
     return(list(aoi_unique = aoi_unique, map_back = map_back))
   }
   
   if (deduplicate) {
-    geometry <- aoi4326[[attr(aoi4326, "sf_column")]]
-    aoi4326$.__wkb <- vapply(sf::st_as_binary(geometry), paste, "", collapse = "")
-    aoi_unique <- aoi4326[!duplicated(aoi4326$.__wkb), , drop = FALSE]
+    geometry <- aoi[[attr(aoi, "sf_column")]]
+    aoi$.__wkb <- vapply(sf::st_as_binary(geometry), paste, "", collapse = "")
+    aoi_unique <- aoi[!duplicated(aoi$.__wkb), , drop = FALSE]
     aoi_unique$.aoi_row <- seq_len(nrow(aoi_unique))
     
-    df1 <- sf::st_drop_geometry(aoi4326)[, c(id_col, ".__wkb"), drop = FALSE]
+    df1 <- sf::st_drop_geometry(aoi)[, c(id_col, ".__wkb"), drop = FALSE]
     df2 <- sf::st_drop_geometry(aoi_unique)[, c(".__wkb", ".aoi_row"), drop = FALSE]
     map_back <- merge(df1, df2, by = ".__wkb", all.x = TRUE, sort = FALSE)
     map_back$.__wkb <- NULL
   } else {
-    aoi_unique <- aoi4326
+    aoi_unique <- aoi
     aoi_unique$.aoi_row <- seq_len(nrow(aoi_unique))
     map_back <- sf::st_drop_geometry(aoi_unique)[, c(id_col, ".aoi_row"), drop = FALSE]
   }

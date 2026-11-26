@@ -67,8 +67,10 @@
 #'   \code{list(n_obs = list(band = 2, fun = "mean"))}. Bands the raster does
 #'   not have are skipped.
 #' @param deduplicate Extract identical geometries only once.
-#' @param crs_planar Projected CRS the AOI is transformed to before extraction.
+#' @param crs_planar Projected CRS the AOI is transformed to before extraction,
+#'   or `NULL` to transform directly to the raster CRS.
 #' @param ids Optional subset of AOI ids to extract (all if \code{NULL}).
+#' @param weights Use cell coverage fractions or covered cell areas.
 #'
 #' @return A data frame with \code{id_col} and the unprefixed statistic
 #'   columns (\code{mean}, \code{sd}, \code{min}, \code{max}, \code{median},
@@ -83,7 +85,9 @@
                                 extra_bands = NULL,
                                 deduplicate = TRUE,
                                 crs_planar = 3857,
-                                ids = NULL) {
+                                ids = NULL,
+                                weights = c("fraction", "area")) {
+  weights <- match.arg(weights)
   r_all <- if (length(files) == 1L) terra::rast(files) else terra::vrt(terra::sprc(files))
   nl <- terra::nlyr(r_all)
   if (band > nl) {
@@ -121,13 +125,16 @@
 
   if (!is.null(ids)) aoi <- aoi[aoi[[id_col]] %in% ids, , drop = FALSE]
 
-  aoi_planar <- sf::st_transform(aoi, crs_planar)
-  dd <- .aoi_deduplicate(aoi_planar, id_col = id_col, deduplicate = deduplicate)
+  aoi_planar <- if (is.null(crs_planar)) aoi else sf::st_transform(aoi, crs_planar)
+  dd <- .aoi_deduplicate(aoi_planar, id_col = id_col, deduplicate = deduplicate,
+                         to_wgs84 = !is.null(crs_planar))
 
   # match the raster CRS (e.g. Mollweide for HFP) to avoid on-the-fly transforms
   au <- sf::st_transform(dd$aoi_unique, terra::crs(r))
 
-  res <- exactextractr::exact_extract(r, au, fun = summary_fn, progress = FALSE)
+  res <- exactextractr::exact_extract(
+    r, au, fun = summary_fn, coverage_area = weights == "area", progress = FALSE
+  )
   if (is.list(res) && !is.data.frame(res)) {
     res <- do.call(rbind, res)
     rownames(res) <- NULL
@@ -140,6 +147,285 @@
   per_aoi <- merge(dd$map_back, res, by = ".aoi_row", all.x = TRUE, sort = FALSE)
   per_aoi$.aoi_row <- NULL
   per_aoi[!duplicated(per_aoi[[id_col]]), , drop = FALSE]
+}
+
+#' @noRd
+.weighted_hist <- function(values, weights) {
+  distinct <- sort(unique(values))
+  sums <- if (length(distinct)) {
+    as.numeric(rowsum(weights, match(values, distinct)))
+  } else {
+    numeric()
+  }
+  data.frame(value = distinct, w = sums)
+}
+
+#' @noRd
+.moments_fn <- function(values, weights) {
+  if (is.data.frame(values)) {
+    return(lapply(values, .moments_fn, weights = weights))
+  }
+
+  covered <- is.finite(weights) & weights > 0
+  valid <- covered & is.finite(values)
+  v <- as.double(values[valid])
+  wt <- weights[valid]
+  w <- sum(wt)
+  mean <- if (w > 0) sum(v * (wt / w)) else NA_real_
+
+  list(
+    w = w, mean = mean, m2 = sum(wt * (v - mean)^2),
+    min = if (w > 0) min(v) else NA_real_,
+    max = if (w > 0) max(v) else NA_real_,
+    w_na = sum(weights[covered & is.na(values)]), n = length(v),
+    hist = .weighted_hist(v, wt)
+  )
+}
+
+#' @noRd
+.combine_moments <- function(a, b) {
+  if (a$w == 0 || b$w == 0) {
+    out <- if (a$w == 0) b else a
+    out$w_na <- a$w_na + b$w_na
+    return(out)
+  }
+
+  w <- a$w + b$w
+  delta <- b$mean - a$mean
+  list(
+    w = w, mean = a$mean + delta * (b$w / w),
+    m2 = a$m2 + b$m2 + delta^2 * a$w * (b$w / w),
+    min = min(a$min, b$min), max = max(a$max, b$max),
+    w_na = a$w_na + b$w_na, n = sum(a$n, b$n),
+    hist = .weighted_hist(c(a$hist$value, b$hist$value), c(a$hist$w, b$hist$w))
+  )
+}
+
+#' @noRd
+.finalize_moments <- function(m, stats) {
+  total <- m$w + m$w_na
+  median <- NA_real_
+  if (m$w > 0) {
+    # Resolve near-half cumulative weights to the lower value. This can differ
+    # from the continuous summary within 1e-9 relative to the half-weight.
+    # Tile order cannot change the median unless the cumulative weight lies
+    # within a few ULP of this cutoff itself.
+    cutoff <- (m$w / 2) * (1 - 1e-9)
+    median <- m$hist$value[which(cumsum(m$hist$w) >= cutoff)[1L]]
+  }
+  data.frame(
+    mean = m$mean,
+    sd = if (m$w > 0) sqrt(m$m2 / m$w) else NA_real_,
+    min = m$min,
+    max = m$max,
+    median = median,
+    missing_perc = if (total > 0) 100 * (m$w_na / total) else NA_real_,
+    n_cells = m$n,
+    area_valid_km2 = m$w / 1e6
+  )[, stats, drop = FALSE]
+}
+
+#' @noRd
+.hist_share <- function(m, pred) {
+  if (m$w == 0) return(NA_real_)
+  100 * (sum(m$hist$w[pred(m$hist$value)]) / m$w)
+}
+
+#' @noRd
+.tile_moments <- function(r, polys) {
+  layers <- names(r)
+  # Keep arbitrary product layer names clear of exact_extract's column names.
+  names(r) <- paste0("layer_", seq_along(layers))
+  summarize <- function(values, coverage_area) {
+    moments <- .moments_fn(values, coverage_area)
+    if (!is.data.frame(values)) moments <- list(moments)
+    # A length-one list preserves the nested result through exact_extract().
+    list(stats::setNames(moments, layers))
+  }
+  exactextractr::exact_extract(
+    r, polys, fun = summarize, coverage_area = TRUE, summarize_df = FALSE, progress = FALSE
+  )
+}
+
+.moments_cache_version <- 1L
+
+#' @noRd
+.is_cached_moment <- function(m) {
+  fields <- c("w", "mean", "m2", "min", "max", "w_na", "n")
+  if (!is.list(m) || !identical(names(m), c(fields, "hist"))) return(FALSE)
+  if (!all(vapply(m[fields], function(x) {
+    is.vector(x, mode = "numeric") && length(x) == 1L
+  }, logical(1)))) return(FALSE)
+  if (!all(is.finite(c(m$w, m$m2, m$w_na, m$n))) ||
+      min(m$w, m$m2, m$w_na, m$n) < 0 || m$n != floor(m$n)) return(FALSE)
+  location <- c(m$mean, m$min, m$max)
+  if (m$w > 0 && !all(is.finite(location))) return(FALSE)
+  if (m$w == 0 && !all(is.na(location))) return(FALSE)
+
+  hist <- m$hist
+  is.data.frame(hist) && identical(names(hist), c("value", "w")) &&
+    is.vector(hist$value, mode = "double") && is.vector(hist$w, mode = "numeric") &&
+    (nrow(hist) > 0L) == (m$w > 0) &&
+    all(is.finite(hist$value)) && !is.unsorted(hist$value, strictly = TRUE) &&
+    all(is.finite(hist$w) & hist$w > 0)
+}
+
+#' @noRd
+.is_tile_cache <- function(cached, ids, layers) {
+  if (!is.list(cached) || !identical(cached[["version"]], .moments_cache_version)) return(FALSE)
+  moments <- cached[["moments"]]
+  is.list(moments) && identical(names(moments), ids) &&
+    all(vapply(moments, function(m) {
+      is.list(m) && identical(names(m), layers) &&
+        all(vapply(m, .is_cached_moment, logical(1)))
+    }, logical(1)))
+}
+
+#' @noRd
+.read_or_extract_tile <- function(job, layers, cache_dir) {
+  path <- job$file
+  tile_id <- job$tile_id
+  polys <- job$polys
+  poly_ids <- job$ids
+  if (!is.null(cache_dir)) {
+    info <- file.info(path)
+    fingerprint <- unname(tools::md5sum(path))
+    if (is.na(fingerprint)) {
+      cli::cli_abort("Could not fingerprint the raster for tile {.val {tile_id}}.")
+    }
+    key <- rlang::hash(list(.moments_cache_version, fingerprint,
+                            info$size, info$mtime, layers, poly_ids,
+                            sf::st_as_binary(sf::st_geometry(polys))))
+    cache_file <- file.path(cache_dir, paste0(tile_id, "_", key, ".rds"))
+    if (file.exists(cache_file)) {
+      cached <- tryCatch(readRDS(cache_file), error = function(e) NULL,
+                         warning = function(w) NULL)
+      if (.is_tile_cache(cached, poly_ids, layers)) {
+        return(cached$moments)
+      }
+      cli::cli_warn("Moments cache for tile {.val {tile_id}} is unreadable or has an invalid schema. Recomputing.")
+    }
+  }
+
+  out <- stats::setNames(.tile_moments(terra::rast(path, guessCRS = FALSE)[[layers]], polys), poly_ids)
+  if (!is.null(cache_dir) && !identical(unname(tools::md5sum(path)), fingerprint)) {
+    # The raster was replaced during extraction; do not cache under the old key.
+    cli::cli_warn("Raster for tile {.val {tile_id}} changed during extraction. Result not cached.")
+  } else if (!is.null(cache_dir)) {
+    tmp <- tempfile(tmpdir = cache_dir)
+    on.exit(unlink(tmp), add = TRUE)
+    saveRDS(list(version = .moments_cache_version, moments = out), tmp)
+    if (!suppressWarnings(file.rename(tmp, cache_file))) {
+      cli::cli_abort("Could not publish the moments cache for tile {.val {tile_id}}.")
+    }
+  }
+  out
+}
+
+#' @noRd
+.validate_tile_extents <- function(extents, tile_ids) {
+  if (anyDuplicated(tile_ids)) {
+    cli::cli_abort("Tile ID {.val {tile_ids[anyDuplicated(tile_ids)]}} occurs more than once.")
+  }
+
+  rectangles <- sf::st_sfc(lapply(extents, function(e) {
+    x <- e[1:2]
+    y <- e[3:4]
+    sf::st_polygon(list(cbind(x[c(1, 2, 2, 1, 1)], y[c(1, 1, 2, 2, 1)])))
+  }))
+  hits <- sf::st_intersects(rectangles)
+  for (i in seq_along(hits)) {
+    a <- extents[[i]]
+    for (j in hits[[i]][hits[[i]] > i]) {
+      b <- extents[[j]]
+      # Shared boundaries are allowed. Any intersection with area is an overlap.
+      if (max(a[1L], b[1L]) < min(a[2L], b[2L]) &&
+          max(a[3L], b[3L]) < min(a[4L], b[4L])) {
+        cli::cli_abort("Tile {.val {tile_ids[i]}} overlaps tile {.val {tile_ids[j]}}.")
+      }
+    }
+  }
+}
+
+#' @noRd
+.extract_tiled <- function(aoi, id_col, tiles, map, layers = NULL, workers = 1,
+                           cache_dir = NULL, progress = TRUE) {
+  tiles <- tiles[!is.na(tiles$file), , drop = FALSE]
+  ids <- as.character(aoi[[id_col]])
+  unique_ids <- unique(ids)
+  extents <- vector("list", nrow(tiles))
+  for (i in seq_len(nrow(tiles))) {
+    tile_id <- tiles$tile_id[i]
+    r <- terra::rast(tiles$file[i], guessCRS = FALSE)
+    crs <- terra::crs(r)
+    if (!nzchar(crs) || sf::st_crs(crs) != sf::st_crs(4326)) {
+      cli::cli_abort("Tile {.val {tile_id}} must use EPSG:4326.")
+    }
+    extent <- as.vector(terra::ext(r))
+    edges <- round(extent)
+    if (any(abs(extent - edges) > 1e-9) || any(edges[c(1L, 3L)] >= edges[c(2L, 4L)])) {
+      cli::cli_abort("Tile {.val {tile_id}} must have whole-degree bounds.")
+    }
+    extents[[i]] <- extent
+    if (is.null(layers)) layers <- names(r)
+    unknown <- setdiff(layers, names(r))
+    if (length(unknown)) {
+      cli::cli_abort("Unknown layer selection {.val {unknown}} in tile {.val {tile_id}}.")
+    }
+  }
+
+  empty <- .moments_fn(numeric(), numeric())
+  empty_layers <- stats::setNames(rep(list(empty), length(layers)), layers)
+  out <- stats::setNames(rep(list(empty_layers), length(unique_ids)), unique_ids)
+  if (!nrow(tiles)) return(out)
+  .validate_tile_extents(extents, tiles$tile_id)
+  if (!length(layers)) return(out)
+
+  aoi_rows <- split(seq_along(ids), match(ids, unique_ids))
+  tile_rows <- lapply(split(match(map$aoi_id, unique_ids), map$tile_id), function(mapped) {
+    sort(unlist(aoi_rows[unique(stats::na.omit(mapped))], use.names = FALSE))
+  })
+  tile_rows <- unname(tile_rows[as.character(tiles$tile_id)])
+  # Pass only a tile's AOI geometries to its worker.
+  geometries <- sf::st_geometry(aoi)
+  if (!is.null(cache_dir)) dir.create(cache_dir, recursive = TRUE, showWarnings = FALSE)
+
+  workers <- as.integer(workers)
+  parallel <- workers > 1L && .has_future_apply()
+  if (workers > 1L && !parallel) {
+    cli::cli_warn("Package {.pkg future.apply} is unavailable. Processing tiles sequentially.")
+  }
+  if (isTRUE(progress)) {
+    progress_id <- cli::cli_progress_bar("Tile extraction", total = nrow(tiles), auto_terminate = FALSE)
+    on.exit(cli::cli_progress_done(id = progress_id), add = TRUE)
+  }
+
+  # Keep only a batch of tile summaries in memory while reducing into the AOIs.
+  batch_size <- if (parallel) workers else 1L
+  for (start in seq.int(1L, nrow(tiles), by = batch_size)) {
+    batch <- seq.int(start, min(start + batch_size - 1L, nrow(tiles)))
+    jobs <- lapply(batch[lengths(tile_rows[batch]) > 0L], function(i) {
+      rows <- tile_rows[[i]]
+      list(file = tiles$file[i], tile_id = tiles$tile_id[i],
+           polys = geometries[rows], ids = ids[rows])
+    })
+    tile_results <- if (parallel && length(jobs)) {
+      future.apply::future_lapply(
+        jobs, .read_or_extract_tile, layers = layers, cache_dir = cache_dir,
+        future.seed = TRUE, future.chunk.size = 1L
+      )
+    } else {
+      lapply(jobs, .read_or_extract_tile, layers = layers, cache_dir = cache_dir)
+    }
+    for (tile in tile_results) {
+      for (j in seq_along(tile)) {
+        id <- names(tile)[j]
+        out[[id]] <- Map(.combine_moments, out[[id]], tile[[j]])
+      }
+    }
+    if (isTRUE(progress)) cli::cli_progress_update(inc = length(batch), id = progress_id)
+  }
+  out
 }
 
 
