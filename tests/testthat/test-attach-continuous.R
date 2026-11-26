@@ -106,3 +106,15 @@ test_that("fetch_hfp uses cached files without contacting figshare", {
   d <- fetch_hfp(make_df(), out_dir = dir, year = 2005, progress = FALSE)
   expect_equal(attr(d, "hfp_tiles")$status, "exists")
 })
+
+test_that("the statistics join preserves columns that match the row-order helper", {
+  df <- data.frame(id = c("b", "a", "b"), .__row_order = c("keep", "all", "three"))
+  stats <- data.frame(id = c("a", "b"), row_order_ = c(1, 2))
+
+  out <- .join_stats(df, stats, by = "id", prefix = ".__")
+
+  expect_identical(names(out), c(names(df), ".__row_order_"))
+  expect_identical(out$id, df$id)
+  expect_identical(out$.__row_order, df$.__row_order)
+  expect_identical(out$.__row_order_, c(2, 1, 2))
+})

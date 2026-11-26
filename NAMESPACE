@@ -2,6 +2,7 @@
 
 export(aoi_from_sf)
 export(aoi_us_counties)
+export(attach_aster_ged)
 export(attach_hfp)
 export(attach_landuse)
 export(attach_ndvi)

@@ -41,8 +41,10 @@ by the caller.}
 }
 \value{
 Invisibly, \code{df} with an \code{aster_ged_tiles} index and an
-\code{aster_ged_map} mapping AOI IDs to tile IDs. The index and fetch parameters
-are also recorded in \code{attr(df, "traktr_layers")$aster_ged}. Tile statuses
+\code{aster_ged_map} mapping AOI IDs to tile IDs. The AOI used for fetch and
+subsequent attachment is recorded in \code{attr(df, "aster_ged_aoi")}.
+The index and fetch parameters are also recorded in
+\code{attr(df, "traktr_layers")$aster_ged}. Tile statuses
 are \code{downloaded}, \code{converted} (from a local HDF5 file), \code{exists},
 \code{missing_remote}, \code{missing_local}, and \code{error}.
 }

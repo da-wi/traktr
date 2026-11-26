@@ -29,8 +29,10 @@
 #' for the supported methods.
 #'
 #' @return Invisibly, `df` with an `aster_ged_tiles` index and an
-#'   `aster_ged_map` mapping AOI IDs to tile IDs. The index and fetch parameters
-#'   are also recorded in `attr(df, "traktr_layers")$aster_ged`. Tile statuses
+#'   `aster_ged_map` mapping AOI IDs to tile IDs. The AOI used for fetch and
+#'   subsequent attachment is recorded in `attr(df, "aster_ged_aoi")`.
+#'   The index and fetch parameters are also recorded in
+#'   `attr(df, "traktr_layers")$aster_ged`. Tile statuses
 #'   are `downloaded`, `converted` (from a local HDF5 file), `exists`,
 #'   `missing_remote`, `missing_local`, and `error`.
 #' @examples
@@ -46,7 +48,8 @@ fetch_aster_ged <- function(df, out_dir, src = NULL, keep_h5 = FALSE, overwrite 
   if (!length(id_col) || !id_col %in% names(aoi)) {
     id_col <- .aoi_detect(structure(aoi, traktr_aoi = aoi))$id_col
   }
-  tl <- .ag100_tiles_for_aoi(sf::st_transform(aoi, 4326), id_col)
+  aoi <- sf::st_transform(aoi[, id_col, drop = FALSE], 4326)
+  tl <- .ag100_tiles_for_aoi(aoi, id_col)
   tiles <- tl$tiles
   dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
@@ -114,6 +117,7 @@ fetch_aster_ged <- function(df, out_dir, src = NULL, keep_h5 = FALSE, overwrite 
   index$size_bytes[ok] <- file.size(index$file[ok])
   attr(df, "aster_ged_tiles") <- index
   attr(df, "aster_ged_map") <- tl$map
+  attr(df, "aster_ged_aoi") <- aoi
   df <- .set_traktr_layer(df, "aster_ged", index, params = list(
     product = "AG100", version = "003", concept_id = "C2763266348-LPCLOUD",
     out_dir = out_dir, src = src, overwrite = overwrite, retrieved = Sys.time()

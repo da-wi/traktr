@@ -21,11 +21,12 @@ navbar:
       href: https://github.com/da-wi/traktr
 
 reference:
-  - title: "Import GPS data"
+  - title: "Import input data"
     desc: >
-      Read raw GPS CSV files into a tidy tibble
+      Read GPS records and county FIPS codes from CSV files.
     contents:
       - read_gps_csv
+      - read_fips_csv
 
   - title: "Define areas of interest"
     desc: >
@@ -33,13 +34,19 @@ reference:
     contents:
       - mutate_aoi_buffer
       - mutate_aoi_h3
+      - aoi_from_sf
+      - aoi_us_counties
 
   - title: "Fetch satellite layers"
     desc: >
       Download remote rasters for your areas of interest. Handles tiling and rate-limits under the hood.
     contents:
       - fetch_ndvi
+      - fetch_ndvi_stac
       - fetch_landuse
+      - fetch_hfp
+      - earthdata_auth_check
+      - fetch_aster_ged
 
   - title: "Attach context layers"
     desc: >
@@ -47,6 +54,8 @@ reference:
     contents:
       - attach_ndvi
       - attach_landuse
+      - attach_hfp
+      - attach_aster_ged
 
   - title: "Summarize exposures"
     desc: >

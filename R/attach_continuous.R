@@ -447,10 +447,14 @@
   stat_cols <- setdiff(names(stats), by)
   names(stats)[match(stat_cols, names(stats))] <- paste0(prefix, stat_cols)
 
-  df$.__row_order <- seq_len(nrow(df))
+  existing_names <- c(names(df), names(stats))
+  row_order <- ".__row_order"
+  while (row_order %in% existing_names) row_order <- paste0(row_order, "_")
+
+  df[[row_order]] <- seq_len(nrow(df))
   out <- merge(df, stats, by = by, all.x = TRUE, sort = FALSE)
-  out <- out[order(out$.__row_order), , drop = FALSE]
-  out$.__row_order <- NULL
+  out <- out[order(out[[row_order]]), , drop = FALSE]
+  out[[row_order]] <- NULL
 
   if ("geometry" %in% names(out)) {
     geom_col <- "geometry"

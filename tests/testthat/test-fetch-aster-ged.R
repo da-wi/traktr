@@ -78,6 +78,8 @@ test_that("local AG100 conversion and the cache bypass remote lookup and authent
   map <- attr(result$value, "aster_ged_map")
   expect_named(map, c("aoi_id", "tile_id"))
   expect_identical(map$tile_id, "40.-105")
+  expect_identical(attr(result$value, "aster_ged_aoi"),
+                   sf::st_transform(attr(df, "traktr_aoi"), 4326))
 
   cached <- fetch_aster_ged(df, out, progress = FALSE)
   expect_identical(attr(cached, "aster_ged_tiles")$status, "exists")
