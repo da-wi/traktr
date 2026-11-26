@@ -1,0 +1,44 @@
+{
+  "feed": {
+    "entry": [
+      {
+        "title": "AG100.v003.40.-105.0001",
+        "boxes": ["39 -105 40 -104"],
+        "links": [{"href": "s3://example/AG100.v003.40.-105.0001.h5"}]
+      },
+      {
+        "title": "AG100.v003.40.-105.0001",
+        "boxes": ["39 -105 40 -104"],
+        "links": [{"href": "https://example.test/direct.h5"}]
+      },
+      {
+        "title": "AG100.v003.40.-105.0001",
+        "boxes": ["39 -105 40 -104"],
+        "links": [{"href": "https://example.test/later.h5"}]
+      },
+      {
+        "title": "AG100.v003.05.-075.0001",
+        "boxes": ["4 -75 5 -74"],
+        "links": [{"href": "s3://example/AG100.v003.05.-075.0001.h5"}]
+      },
+      {
+        "title": "invalid title",
+        "boxes": ["2 -70 3 -69"],
+        "links": [{"href": "s3://example/invalid.h5"}]
+      },
+      {
+        "title": "AG100.v003.04.-071.0001",
+        "links": [{"href": "s3://example/AG100.v003.04.-071.0001.h5"}]
+      },
+      {
+        "title": "noncanonical title with direct link",
+        "boxes": ["3 -71 4 -70"],
+        "links": [{"href": "https://example.test/box-match.h5"}]
+      },
+      {
+        "title": "AG100.v003.04.-071.0001",
+        "links": [{"href": "https://example.test/later-canonical.h5"}]
+      }
+    ]
+  }
+}

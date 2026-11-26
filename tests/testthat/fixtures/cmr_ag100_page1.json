@@ -1,0 +1,21 @@
+{
+  "feed": {
+    "entry": [
+      {
+        "title": "AG100.v003.40.-105.0001",
+        "boxes": ["39 -105 40 -104"],
+        "links": [
+          {"href": "s3://example/AG100.v003.40.-105.0001.h5"},
+          {"href": "https://example.test/metadata.xml"},
+          {},
+          {"href": "https://example.test/AG100.v003.40.-105.0001.h5"},
+          {"href": "https://other.example.test/AG100.v003.40.-105.0001.h5"}
+        ]
+      },
+      {
+        "title": "AG100.v003.05.-075.0001",
+        "links": [{"href": "https://example.test/AG100.v003.05.-075.0001.h5"}]
+      }
+    ]
+  }
+}
