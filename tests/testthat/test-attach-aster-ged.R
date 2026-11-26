@@ -108,9 +108,12 @@ test_that("the public fetch-to-attach workflow produces the exact column names",
     expect_length(core[[naming]], 35)
     expect_named(result, c(names(input), core[[naming]]))
     expect_true(all(is.finite(result[[core[[naming]][1L]]])))
+    expect_equal(result[[core[[naming]][2L]]], rep(1533, 2))
+    expect_equal(result[[core[[naming]][3L]]], rep(1698, 2))
     result <- attach_aster_ged(input, naming = naming, progress = FALSE)
     expected_names <- c(core[[naming]], extras[[naming]])
     expect_named(result, c(names(input), expected_names))
+    expect_equal(result[[extras[[naming]][7L]]], rep(252, 2))
     expect_identical(dictionary[[paste0("name_", naming)]], expected_names)
     expect_false(anyDuplicated(expected_names) > 0)
   }
@@ -240,6 +243,53 @@ test_that("attachment uses the AOI override recorded by fetch", {
   expect_true(is.na(out$ASTER_county_elevation_mean[2L]))
   expect_equal(out$county_area_km2_geodesic, c(.aster_ged_area(override[1L, ]), NA_real_))
   expect_identical(attr(out, "traktr_layers")$aster_ged_summary$index$tile_id, "5.-75")
+})
+
+test_that("AG100 fetch and attach agree for split and unsplit antimeridian polygons", {
+  dir <- withr::local_tempdir()
+  src <- withr::local_tempdir()
+  h <- 1 / (2 * 19)
+  for (lon in c(179, -180)) {
+    r <- terra::rast(nrows = 20, ncols = 20, nlyrs = 7, xmin = lon - h,
+                     xmax = lon + 1 + h, ymin = -h, ymax = 1 + h,
+                     crs = "EPSG:4326", vals = if (lon == 179) 10 else 20)
+    names(r) <- c("elev", "ndvi_mean", "ndvi_sd", "temp_mean", "temp_sd", "lwm", "nobs")
+    path <- file.path(dir, sprintf("ag100_v003_1_%d.tif", lon))
+    terra::writeRaster(r, path, datatype = "INT4S")
+  }
+  aoi <- function(geometry) sf::st_sf(id = "a", geometry = geometry)
+  df <- aoi_from_sf(aoi(aster_summary_polygon(179.4, 180, 0.25, 0.75)), id_col = "id")
+  summarize <- function(geometry) {
+    fetched <- fetch_aster_ged(df, dir, src = src, aoi = aoi(geometry), progress = FALSE)
+    tiles <- attr(fetched, "aster_ged_tiles")
+    expect_setequal(tiles$tile_id, c("1.179", "1.-180"))
+    expect_identical(tiles$status, rep("exists", 2))
+    attach_aster_ged(fetched, bands = "elev", naming = "traktr", extras = "n_cells",
+                     progress = FALSE, cache = FALSE)
+  }
+
+  ring <- rbind(c(179.4, 0.25), c(-179.7, 0.25), c(-179.7, 0.75),
+                c(179.4, 0.75), c(179.4, 0.25))
+  unsplit <- sf::st_sfc(sf::st_polygon(list(ring)), crs = 4326)
+  split <- sf::st_combine(c(aster_summary_polygon(179.4, 180, 0.25, 0.75),
+                            aster_summary_polygon(-180, -179.7, 0.25, 0.75)))
+  actual <- summarize(unsplit)
+  expected <- summarize(split)
+  expect_equal(actual$aster_elev_mean, 40 / 3, tolerance = 1e-8)
+  expect_equal(actual$aster_elev_mean, expected$aster_elev_mean, tolerance = 1e-9)
+  expect_identical(actual$aster_n_cells, expected$aster_n_cells)
+  expect_equal(actual$aster_n_cells, 180)
+
+  centre <- sf::st_sfc(sf::st_point(c(179.9995, 0.52)), crs = 4326)
+  local_crs <- "+proj=aeqd +lat_0=0.52 +lon_0=179.9995 +datum=WGS84 +units=m"
+  buffer <- sf::st_transform(sf::st_buffer(sf::st_transform(centre, local_crs), 200), 4326)
+  wrapped <- sf::st_wrap_dateline(buffer, options = "WRAPDATELINE=YES", quiet = TRUE)
+  actual <- summarize(buffer)
+  expected <- summarize(wrapped)
+  expect_identical(as.character(sf::st_geometry_type(wrapped)), "MULTIPOLYGON")
+  expect_equal(actual$aster_elev_mean, expected$aster_elev_mean, tolerance = 1e-9)
+  expect_identical(actual$aster_n_cells, expected$aster_n_cells)
+  expect_equal(actual$aster_n_cells, 1)
 })
 
 test_that("the join preserves repeated IDs, row order, attributes and geometry", {

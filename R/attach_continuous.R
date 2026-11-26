@@ -192,13 +192,17 @@
 
   w <- a$w + b$w
   delta <- b$mean - a$mean
-  list(
+  a_edges <- attr(a, "edge_cells")
+  b_edges <- attr(b, "edge_cells")
+  out <- list(
     w = w, mean = a$mean + delta * (b$w / w),
     m2 = a$m2 + b$m2 + delta^2 * a$w * (b$w / w),
     min = min(a$min, b$min), max = max(a$max, b$max),
-    w_na = a$w_na + b$w_na, n = sum(a$n, b$n),
+    w_na = a$w_na + b$w_na, n = sum(a$n, b$n) - length(intersect(a_edges, b_edges)),
     hist = .weighted_hist(c(a$hist$value, b$hist$value), c(a$hist$w, b$hist$w))
   )
+  if (length(a_edges) || length(b_edges)) attr(out, "edge_cells") <- union(a_edges, b_edges)
+  out
 }
 
 #' @noRd
@@ -232,22 +236,43 @@
 }
 
 #' @noRd
-.tile_moments <- function(r, polys) {
+.tile_moments <- function(r, polys, box = NULL) {
   layers <- names(r)
   # Keep arbitrary product layer names clear of exact_extract's column names.
-  names(r) <- paste0("layer_", seq_along(layers))
-  summarize <- function(values, coverage_area) {
-    moments <- .moments_fn(values, coverage_area)
-    if (!is.data.frame(values)) moments <- list(moments)
+  raster_names <- paste0("layer_", seq_along(layers))
+  names(r) <- raster_names
+  value_columns <- if (length(layers) == 1L) "value" else raster_names
+  track_edges <- !is.null(box) && any(abs(as.vector(terra::ext(r)) - box) > 1e-9)
+  res <- terra::res(r)
+  summarize <- function(cells) {
+    weights <- cells$coverage_area
+    values <- cells[value_columns]
+    moments <- .moments_fn(values, weights)
+    if (track_edges) {
+      # Only cells centred on a box boundary can occur in adjacent AG100 tiles.
+      near <- function(x, edge) abs(x - edge) <= 1e-9
+      edge <- which(is.finite(weights) & weights > 0 &
+                      (near(cells$x, box[1L]) | near(cells$x, box[2L]) |
+                         near(cells$y, box[3L]) | near(cells$y, box[4L])))
+      x <- cells$x[edge]
+      x[near(x, 180)] <- -180
+      keys <- sprintf("%.10f,%.10f,%.10f,%.10f",
+                      round(x, 10L) + 0, round(cells$y[edge], 10L) + 0, res[1L], res[2L])
+      for (i in seq_along(moments)) {
+        valid <- is.finite(values[[i]][edge])
+        if (any(valid)) attr(moments[[i]], "edge_cells") <- keys[valid]
+      }
+    }
     # A length-one list preserves the nested result through exact_extract().
     list(stats::setNames(moments, layers))
   }
   exactextractr::exact_extract(
-    r, polys, fun = summarize, coverage_area = TRUE, summarize_df = FALSE, progress = FALSE
+    r, polys, fun = summarize, coverage_area = TRUE, summarize_df = TRUE,
+    include_xy = track_edges, progress = FALSE
   )
 }
 
-.moments_cache_version <- 1L
+.moments_cache_version <- 2L
 
 #' @noRd
 .is_cached_moment <- function(m) {
@@ -262,6 +287,9 @@
   if (m$w > 0 && !all(is.finite(location))) return(FALSE)
   if (m$w == 0 && !all(is.na(location))) return(FALSE)
 
+  edges <- attr(m, "edge_cells")
+  if (!is.null(edges) && (!is.character(edges) || anyNA(edges) ||
+                          anyDuplicated(edges) || length(edges) > m$n)) return(FALSE)
   hist <- m$hist
   is.data.frame(hist) && identical(names(hist), c("value", "w")) &&
     is.vector(hist$value, mode = "double") && is.vector(hist$w, mode = "numeric") &&
@@ -294,7 +322,7 @@
       cli::cli_abort("Could not fingerprint the raster for tile {.val {tile_id}}.")
     }
     key <- rlang::hash(list(.moments_cache_version, fingerprint,
-                            info$size, info$mtime, layers, poly_ids,
+                            info$size, info$mtime, layers, poly_ids, job$box, job$rows,
                             sf::st_as_binary(sf::st_geometry(polys))))
     cache_file <- file.path(cache_dir, paste0(tile_id, "_", key, ".rds"))
     if (file.exists(cache_file)) {
@@ -307,7 +335,18 @@
     }
   }
 
-  out <- stats::setNames(.tile_moments(terra::rast(path, guessCRS = FALSE)[[layers]], polys), poly_ids)
+  r <- terra::rast(path, guessCRS = FALSE)[[layers]]
+  out <- stats::setNames(.tile_moments(r, polys, job$box), poly_ids)
+  if (!is.null(job$box)) {
+    for (j in seq_along(out)) {
+      for (i in seq_along(out[[j]])) {
+        edges <- attr(out[[j]][[i]], "edge_cells")
+        if (length(edges)) {
+          attr(out[[j]][[i]], "edge_cells") <- paste(job$rows[j], edges, sep = ":")
+        }
+      }
+    }
+  }
   if (!is.null(cache_dir) && !identical(unname(tools::md5sum(path)), fingerprint)) {
     # The raster was replaced during extraction; do not cache under the old key.
     cli::cli_warn("Raster for tile {.val {tile_id}} changed during extraction. Result not cached.")
@@ -348,12 +387,70 @@
 }
 
 #' @noRd
+.clip_tile_polygons <- function(polys, box) {
+  previous_s2 <- getOption("sf_use_s2")
+  on.exit(options(sf_use_s2 = previous_s2), add = TRUE)
+  suppressMessages(sf::sf_use_s2(FALSE))
+
+  # Most AOIs can be clipped in one pass without splitting multipart features.
+  if (!any(vapply(polys, .ag100_crosses_antimeridian, logical(1)))) {
+    return(.intersect_tile_box(polys, box))
+  }
+
+  # Classify each polygon independently so an already split multipart AOI
+  # can also contain a ring that still needs its longitudes shifted.
+  parts <- sf::st_cast(sf::st_sf(row = seq_along(polys), geometry = polys),
+                       "POLYGON", warn = FALSE)
+  rings <- sf::st_geometry(parts)
+  shifted <- vapply(rings, .ag100_crosses_antimeridian, logical(1))
+  pieces <- polys[0L]
+  rows <- integer()
+  for (shift in c(FALSE, TRUE)) {
+    i <- which(shifted == shift)
+    if (!length(i)) next
+    tile_rings <- rings[i]
+    if (shift) tile_rings <- sf::st_shift_longitude(tile_rings)
+    offset <- if (shift && box[1L] < 0) 360 else 0
+    clipped <- .intersect_tile_box(tile_rings, box + c(offset, offset, 0, 0))
+    if (!length(clipped$index)) next
+    if (offset != 0) {
+      clipped$polys <- sf::st_set_crs(clipped$polys - c(offset, 0), 4326)
+    }
+    pieces <- c(pieces, clipped$polys)
+    rows <- c(rows, parts$row[i[clipped$index]])
+  }
+  # Reassemble each original AOI row before counting its raster cells.
+  by_row <- split(seq_along(rows), rows)
+  merged <- lapply(by_row, function(i) sf::st_combine(pieces[i])[[1L]])
+  list(polys = sf::st_sfc(merged, crs = 4326), index = as.integer(names(by_row)))
+}
+
+#' @noRd
+.intersect_tile_box <- function(polys, box) {
+  bounds <- stats::setNames(box, c("xmin", "xmax", "ymin", "ymax"))
+  rectangle <- sf::st_as_sfc(sf::st_bbox(bounds, crs = 4326))
+  clipped <- suppressMessages(sf::st_intersection(polys, rectangle))
+  keep <- which(!sf::st_is_empty(clipped) & sf::st_dimension(clipped) == 2L)
+  index <- attr(clipped, "idx")[keep, 1L]
+  clipped <- clipped[keep]
+  if (any(sf::st_geometry_type(clipped) == "GEOMETRYCOLLECTION")) {
+    clipped <- suppressWarnings(sf::st_collection_extract(clipped, "POLYGON"))
+  }
+  list(polys = clipped, index = index)
+}
+
+#' @noRd
 .extract_tiled <- function(aoi, id_col, tiles, map, layers = NULL, workers = 1,
                            cache_dir = NULL, progress = TRUE) {
   tiles <- tiles[!is.na(tiles$file), , drop = FALSE]
   ids <- as.character(aoi[[id_col]])
   unique_ids <- unique(ids)
   extents <- vector("list", nrow(tiles))
+  box_cols <- c("xmin", "xmax", "ymin", "ymax")
+  has_box <- all(box_cols %in% names(tiles))
+  if (!has_box && any(box_cols %in% names(tiles))) {
+    cli::cli_abort("Nominal tile boxes require xmin, xmax, ymin and ymax.")
+  }
   for (i in seq_len(nrow(tiles))) {
     tile_id <- tiles$tile_id[i]
     r <- terra::rast(tiles$file[i], guessCRS = FALSE)
@@ -362,11 +459,18 @@
       cli::cli_abort("Tile {.val {tile_id}} must use EPSG:4326.")
     }
     extent <- as.vector(terra::ext(r))
-    edges <- round(extent)
-    if (any(abs(extent - edges) > 1e-9) || any(edges[c(1L, 3L)] >= edges[c(2L, 4L)])) {
+    box <- if (has_box) unlist(tiles[i, box_cols], use.names = FALSE) else extent
+    if (!is.numeric(box) || any(!is.finite(box))) {
+      cli::cli_abort("Tile {.val {tile_id}} must have finite numeric bounds.")
+    }
+    edges <- round(box)
+    if (any(abs(box - edges) > 1e-9) || any(edges[c(1L, 3L)] >= edges[c(2L, 4L)])) {
       cli::cli_abort("Tile {.val {tile_id}} must have whole-degree bounds.")
     }
-    extents[[i]] <- extent
+    if (has_box && any((extent - box) * c(1, -1, 1, -1) > 1e-9)) {
+      cli::cli_abort("Raster for tile {.val {tile_id}} does not cover its nominal box.")
+    }
+    extents[[i]] <- box
     if (is.null(layers)) layers <- names(r)
     unknown <- setdiff(layers, names(r))
     if (length(unknown)) {
@@ -406,9 +510,17 @@
     batch <- seq.int(start, min(start + batch_size - 1L, nrow(tiles)))
     jobs <- lapply(batch[lengths(tile_rows[batch]) > 0L], function(i) {
       rows <- tile_rows[[i]]
+      polys <- geometries[rows]
+      box <- if (has_box) extents[[i]]
+      if (has_box) {
+        clipped <- .clip_tile_polygons(polys, box)
+        polys <- clipped$polys
+        rows <- rows[clipped$index]
+      }
       list(file = tiles$file[i], tile_id = tiles$tile_id[i],
-           polys = geometries[rows], ids = ids[rows])
+           polys = polys, ids = ids[rows], box = box, rows = if (has_box) rows)
     })
+    jobs <- Filter(function(job) length(job$ids) > 0L, jobs)
     tile_results <- if (parallel && length(jobs)) {
       future.apply::future_lapply(
         jobs, .read_or_extract_tile, layers = layers, cache_dir = cache_dir,

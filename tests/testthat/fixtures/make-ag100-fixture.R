@@ -1,5 +1,5 @@
 # Run from the package root to regenerate the offline AG100 fixtures.
-write_ag100_fixture <- function(path, lat_n, lon_w, bad = FALSE, vectors = FALSE) {
+write_ag100_fixture <- function(path, lat_n, lon_w, old_grid = FALSE) {
   dir.create(dirname(path), showWarnings = FALSE, recursive = TRUE)
   if (file.exists(path)) unlink(path)
   access <- rhdf5::H5Pcreate("H5P_FILE_ACCESS")
@@ -10,9 +10,9 @@ write_ag100_fixture <- function(path, lat_n, lon_w, bad = FALSE, vectors = FALSE
   n <- 20L
   rows <- row(matrix(0, n, n))
   cols <- col(rows)
-  lat <- lat_n - (seq_len(n) - 0.5) / n
-  lon <- lon_w + (seq_len(n) - 0.5) / n
-  if (bad) lat <- rev(lat)
+  offset <- if (old_grid) (seq_len(n) - 0.5) / n else seq(0, 1, length.out = n)
+  lat <- lat_n - offset
+  lon <- lon_w + offset
 
   bands <- list(
     "ASTER GDEM/ASTGDEM" = 1500L + 10L * rows + cols,
@@ -28,15 +28,18 @@ write_ag100_fixture <- function(path, lat_n, lon_w, bad = FALSE, vectors = FALSE
     band
   })
   geolocation <- list(
-    "Geolocation/Latitude" = if (vectors) lat else matrix(lat, n, n),
-    "Geolocation/Longitude" = if (vectors) lon else matrix(lon, n, n, byrow = TRUE)
+    "Geolocation/Latitude" = matrix(lat, n, n),
+    "Geolocation/Longitude" = matrix(lon, n, n, byrow = TRUE)
   )
   datasets <- c(bands, geolocation)
   for (group in unique(dirname(names(datasets)))) rhdf5::h5createGroup(path, group)
   for (name in names(datasets)) {
     data <- datasets[[name]]
     # HDF5's row-major order is the reverse of R's matrix storage order.
-    if (is.matrix(data)) data <- t(data)
+    data <- t(data)
+    if (name %in% names(geolocation)) {
+      rhdf5::h5createDataset(path, name, dim(data), H5type = "H5T_IEEE_F32LE")
+    }
     rhdf5::h5write(data, path, name)
   }
 }
@@ -44,9 +47,8 @@ write_ag100_fixture <- function(path, lat_n, lon_w, bad = FALSE, vectors = FALSE
 root <- file.path("tests", "testthat", "fixtures", "ag100")
 normal <- "AG100.v003.40.-105.0001.h5"
 write_ag100_fixture(file.path(root, normal), 40, -105)
-write_ag100_fixture(file.path(root, "bad", normal), 40, -105, bad = TRUE)
-write_ag100_fixture(file.path(root, "AG100.v003.05.-075.0001.h5"), 5, -75,
-                    vectors = TRUE)
+write_ag100_fixture(file.path(root, "bad", normal), 40, -105, old_grid = TRUE)
+write_ag100_fixture(file.path(root, "AG100.v003.05.-075.0001.h5"), 5, -75)
 
 nodata <- file.path(root, "nodata", normal)
 write_ag100_fixture(nodata, 40, -105)

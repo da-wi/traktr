@@ -198,6 +198,67 @@ test_that("overlapping, misaligned, and non-4326 tiles and unknown layers are re
   expect_error(extract(tile, layers = "unknown"), "Unknown layer.*unknown.*one")
 })
 
+test_that("nominal tile boxes count a shared AG100 row once", {
+  dir <- withr::local_tempdir()
+  res <- 1 / 19
+  h <- res / 2
+  r <- terra::rast(xmin = -h, xmax = 1 + h, ymin = 39 - h, ymax = 41 + h,
+                   ncols = 20, nrows = 39, crs = "EPSG:4326")
+  terra::values(r) <- seq_len(terra::ncell(r))
+  names(r) <- "value"
+  tiles <- rbind(
+    tiled_write(terra::crop(r, terra::ext(-h, 1 + h, 40 - h, 41 + h)), dir, "north"),
+    tiled_write(terra::crop(r, terra::ext(-h, 1 + h, 39 - h, 40 + h)), dir, "south")
+  )
+  tiles$xmin <- 0
+  tiles$xmax <- 1
+  tiles$ymin <- c(40, 39)
+  tiles$ymax <- c(41, 40)
+  whole <- transform(tiled_write(r, dir, "whole"), xmin = 0, xmax = 1, ymin = 39, ymax = 41)
+  aoi <- tiled_aoi(0.19, 0.81, 39.75, 40.375)
+  extract <- function(index, ...) {
+    .extract_tiled(aoi, "region", index, tiled_map(index), progress = FALSE, ...)$a$value
+  }
+  original_s2 <- getOption("sf_use_s2")
+  cache <- file.path(dir, "moments")
+  actual <- extract(tiles, cache_dir = cache)
+  expect_identical(getOption("sf_use_s2"), original_s2)
+  expected <- extract(whole)
+  stats <- c("mean", "sd", "median", "n_cells")
+  expect_equal(.finalize_moments(actual, stats), .finalize_moments(expected, stats),
+               tolerance = 1e-9)
+  expect_identical(actual$n, expected$n)
+  expect_equal(actual$w / expected$w, 1, tolerance = 1e-6)
+  expect_identical(extract(tiles, cache_dir = cache), actual)
+
+  # Bypass the overlap guard for the countercheck and extract both rasters
+  # directly with the unclipped AOI.
+  unclipped <- lapply(tiles$file, function(file) {
+    .tile_moments(terra::rast(file), sf::st_geometry(aoi))[[1L]]$value
+  })
+  expect_gt(sum(vapply(unclipped, `[[`, numeric(1), "w")), expected$w)
+})
+
+test_that("nominal boxes are validated even for the same underlying raster", {
+  dir <- withr::local_tempdir()
+  tile <- tiled_write(tiled_raster(0, 2), dir, "wide")
+  west <- transform(tile, xmin = 0, xmax = 1, ymin = 0, ymax = 1)
+  east <- transform(tile, tile_id = "east", xmin = 1, xmax = 2, ymin = 0, ymax = 1)
+  aoi <- tiled_aoi(0.25, 1, 0.25, 0.75)
+  extract <- function(tiles, ...) {
+    .extract_tiled(aoi, "region", tiles, tiled_map(tiles), progress = FALSE, ...)
+  }
+  expect_identical(extract(east)$a$elev$n, 0L)
+  expect_identical(extract(rbind(west, east)), extract(west))
+  expect_error(extract(rbind(transform(west, xmax = 2), east)), "wide.*overlaps.*east")
+  expect_error(extract(transform(west, xmin = -1)), "wide.*does not cover.*nominal box")
+
+  cache <- file.path(dir, "moments")
+  expect_identical(extract(west, cache_dir = cache),
+                   extract(transform(west, xmax = 2), cache_dir = cache))
+  expect_length(list.files(cache), 2L)
+})
+
 test_that("tiles without a CRS are rejected even when their bounds look geographic", {
   dir <- withr::local_tempdir()
   r <- tiled_raster()

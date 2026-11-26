@@ -113,7 +113,14 @@ attach_aster_ged <- function(df,
   }
 
   layers <- unique(core$band)
-  moments <- .extract_tiled(aoi, id_col, tiles, map, layers = layers, workers = workers,
+  extraction_tiles <- tiles
+  if (all(c("lat_n", "lon_w") %in% names(tiles))) {
+    extraction_tiles$xmin <- tiles$lon_w
+    extraction_tiles$xmax <- tiles$lon_w + 1
+    extraction_tiles$ymin <- tiles$lat_n - 1
+    extraction_tiles$ymax <- tiles$lat_n
+  }
+  moments <- .extract_tiled(aoi, id_col, extraction_tiles, map, layers = layers, workers = workers,
                             cache_dir = cache_dir, progress = progress)
   ids <- aoi[[id_col]]
   stats <- data.frame(ids = ids[!duplicated(ids)], check.names = FALSE)
@@ -148,7 +155,7 @@ attach_aster_ged <- function(df,
   invisible(out)
 }
 
-# Per handoff; verify against AG100 user guide / smoke test.
+# Confirmed on tile 40.-105 (smoke run 2, 2026-11-26).
 .ag100_water_value <- 1L
 
 .aster_ged_band_summary <- function(moments, band, stats, convert, ecolozip_na_quirk) {

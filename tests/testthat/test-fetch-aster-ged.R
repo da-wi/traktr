@@ -49,7 +49,9 @@ test_that("AG100 conversion preserves band order, georeferencing and raw values"
   .ag100_h5_to_tif(ag100_fixture(), tif, 40, -105)
   r <- terra::rast(tif)
 
-  expect_equal(unname(as.vector(terra::ext(r))), c(-105, -104, 39, 40))
+  bounds <- c(-105, -104, 39, 40) + c(-1, 1, -1, 1) / (2 * 19)
+  expect_equal(unname(as.vector(terra::ext(r))), bounds, tolerance = 1e-12)
+  expect_equal(terra::res(r), rep(1 / 19, 2), tolerance = 1e-12)
   expect_identical(sf::st_crs(terra::crs(r))$epsg, 4326L)
   expect_identical(names(r), c("elev", "ndvi_mean", "ndvi_sd", "temp_mean", "temp_sd", "lwm", "nobs"))
   expect_identical(terra::datatype(r), rep("INT4S", 7))
@@ -57,11 +59,42 @@ test_that("AG100 conversion preserves band order, georeferencing and raw values"
   expect_equal(unname(values[1, ]), c(1511, 302, 21, 33001, 10, 1, 3))
   expect_equal(unname(values[400, ]), c(1720, 340, 40, 33020, 200, 0, 60))
   expect_true(all(is.na(values[c(87, 88, 107, 108), ])))
-  expect_error(.ag100_h5_to_tif(
-    ag100_fixture(file.path("bad", "AG100.v003.40.-105.0001.h5")), tif, 40, -105
-  ), "orientation|decreasing")
   expect_error(.ag100_h5_to_tif(ag100_fixture(), tif, 41, -105), "extent")
-  expect_equal(unname(as.vector(terra::ext(terra::rast(tif)))), c(-105, -104, 39, 40))
+  expect_equal(unname(as.vector(terra::ext(terra::rast(tif)))), bounds)
+})
+
+test_that("AG100 rejects the old inner grid and reports observed and expected endpoints", {
+  ag100_skip_without_hdf5()
+  tif <- withr::local_tempfile(fileext = ".tif")
+  h5 <- ag100_fixture(file.path("bad", "AG100.v003.40.-105.0001.h5"))
+  err <- expect_error(.ag100_h5_to_tif(h5, tif, 40, -105), "Observed endpoints")
+  observed <- utils::strcapture(
+    paste0("Observed endpoints: Geolocation/Latitude (-?[0-9]+[.][0-9]+) to (-?[0-9]+[.][0-9]+), ",
+           "Geolocation/Longitude (-?[0-9]+[.][0-9]+) to (-?[0-9]+[.][0-9]+)"),
+    conditionMessage(err), list(north = double(), south = double(), west = double(), east = double())
+  )
+  expect_equal(unlist(observed, use.names = FALSE), c(39.975, 39.025, -104.975, -104.025),
+               tolerance = 1e-7)
+  expect_match(conditionMessage(err),
+               "Expected endpoints: Geolocation/Latitude 40 to 39, Geolocation/Longitude -105 to -104")
+  expect_false(file.exists(tif))
+})
+
+test_that("the local Denver AG100 tile has inclusive endpoints and plausible values", {
+  skip_on_ci()
+  skip_on_cran()
+  h5 <- testthat::test_path("..", "..", "testoutput", "ag100", "ag100_v003_40_-105.h5")
+  skip_if_not(file.exists(h5), "Local Denver AG100 tile is unavailable")
+  ag100_skip_without_hdf5()
+  tif <- withr::local_tempfile(fileext = ".tif")
+  .ag100_h5_to_tif(h5, tif, 40, -105)
+  r <- terra::rast(tif)
+  expect_equal(unname(as.vector(terra::ext(r))),
+               c(-105, -104, 39, 40) + c(-1, 1, -1, 1) / (2 * 999), tolerance = 1e-12)
+  expect_equal(terra::res(r), rep(1 / 999, 2), tolerance = 1e-12)
+  elev <- terra::extract(r[["elev"]], matrix(c(-104.9903, 39.7392), ncol = 2))$elev
+  expect_true(elev >= 1550 && elev <= 1650)
+  expect_setequal(unique(terra::values(r[["lwm"]], mat = FALSE)), c(0, 1))
 })
 
 test_that("AG100 transposes both band and coordinate arrays in a transposed layout", {
@@ -92,27 +125,35 @@ test_that("AG100 masks the HDF5 dataset's declared fill value", {
   expect_true(all(is.na(values[c(87, 88, 107, 108), ])))
 })
 
-test_that("AG100 diagnoses swapped one-dimensional coordinates on a square tile", {
+test_that("AG100 accepts one-dimensional coordinates and diagnoses swapped axes", {
   ag100_skip_without_hdf5()
   tif <- withr::local_tempfile(fileext = ".tif")
+  h5 <- ag100_fixture("AG100.v003.05.-075.0001.h5")
   read_array <- .ag100_read_array
+  swapped <- FALSE
   local_mocked_bindings(.ag100_read_array = function(address) {
     if (endsWith(address, "/Latitude")) {
-      address <- sub("/Latitude$", "/Longitude", address)
-    } else if (endsWith(address, "/Longitude")) {
-      address <- sub("/Longitude$", "/Latitude", address)
+      val <- if (swapped) read_array(sub("/Latitude$", "/Longitude", address))[1L, ] else
+        read_array(address)[, 1L]
+      return(matrix(val, nrow = 1L))
+    }
+    if (endsWith(address, "/Longitude")) {
+      val <- if (swapped) read_array(sub("/Longitude$", "/Latitude", address))[, 1L] else
+        read_array(address)[1L, ]
+      return(matrix(val, nrow = 1L))
     }
     read_array(address)
   })
-  expect_error(.ag100_h5_to_tif(ag100_fixture("AG100.v003.05.-075.0001.h5"), tif, 5, -75),
-               "lat/lon axes swapped")
+  expect_no_error(.ag100_h5_to_tif(h5, tif, 5, -75))
+  swapped <- TRUE
+  expect_error(.ag100_h5_to_tif(h5, tif, 5, -75), "lat/lon axes swapped")
 })
 
 test_that("AG100 diagnoses reversed square coordinate vectors within the tile bounds", {
   ag100_skip_without_hdf5()
   tif <- withr::local_tempfile(fileext = ".tif")
-  lat <- c(39.25, 39.75)
-  lon <- c(39.75, 39.25)
+  lat <- c(39, 40)
+  lon <- c(40, 39)
   local_mocked_bindings(.ag100_read_array = function(address) {
     if (endsWith(address, "/Latitude")) return(matrix(lat, nrow = 1L))
     if (endsWith(address, "/Longitude")) return(matrix(lon, nrow = 1L))
@@ -125,14 +166,14 @@ test_that("AG100 diagnoses reversed square coordinate vectors within the tile bo
 })
 
 test_that("AG100 accepts float32 coordinate rounding and rejects an irregular step", {
-  res <- 0.001
-  centres <- (seq_len(1000L) - 0.5) * res
+  res <- 1 / 999
+  centres <- seq(0, 1, length.out = 1000L)
   lat <- 40 - centres
   lon <- readBin(writeBin(-105 + centres, raw(), size = 4L),
                  "double", n = length(centres), size = 4L)
 
-  expect_equal(.ag100_extent(lat, lon, 40, -105), c(-105, -104, 39, 40),
-               tolerance = res / 100)
+  expect_equal(.ag100_extent(lat, lon, 40, -105),
+               c(-105, -104, 39, 40) + c(-1, 1, -1, 1) * res / 2)
   lon[500L] <- lon[500L] + res / 20
   expect_error(.ag100_extent(lat, lon, 40, -105), "constant step")
 })
@@ -171,7 +212,65 @@ test_that("local AG100 conversion and the cache bypass remote lookup and authent
   expect_identical(calls, 0L)
 })
 
-test_that("AG100 matches padded filenames and reads one-dimensional geolocation", {
+test_that("AG100 recreates old TIFF grids and rejects incompatible cached bands", {
+  ag100_skip_without_hdf5()
+  out <- withr::local_tempdir()
+  tif <- file.path(out, "ag100_v003_40_-105.tif")
+  old <- terra::rast(nrows = 20, ncols = 20, nlyrs = 7, xmin = -105, xmax = -104,
+                     ymin = 39, ymax = 40, crs = "EPSG:4326", vals = 0)
+  names(old) <- c("elev", "ndvi_mean", "ndvi_sd", "temp_mean", "temp_sd", "lwm", "nobs")
+  terra::writeRaster(old, tif, datatype = "INT4S")
+  fetch <- function() {
+    fetch_aster_ged(ag100_fetch_aoi(), out, src = dirname(ag100_fixture()), progress = FALSE)
+  }
+  expect_message(fetched <- fetch(), "outdated grid, re-creating")
+  expect_identical(attr(fetched, "aster_ged_tiles")$status, "converted")
+  r <- terra::rast(tif)
+  expect_equal(unname(as.vector(terra::ext(r))),
+               c(-105, -104, 39, 40) + c(-1, 1, -1, 1) / (2 * 19))
+  expect_equal(terra::res(r), rep(1 / 19, 2))
+  expect_equal(unname(terra::values(r)[1L, "elev"]), 1511)
+  expect_no_message(cached <- fetch())
+  expect_identical(attr(cached, "aster_ged_tiles")$status, "exists")
+
+  wrong_bands <- terra::rast(r)
+  terra::values(wrong_bands) <- 0
+  names(wrong_bands)[1L] <- "other"
+  terra::writeRaster(wrong_bands, tif, datatype = "INT4S", overwrite = TRUE)
+  expect_message(fetched <- fetch(), "outdated grid, re-creating")
+  expect_identical(attr(fetched, "aster_ged_tiles")$status, "converted")
+  expect_identical(names(terra::rast(tif)), names(old))
+})
+
+test_that("AG100 recreates cached TIFFs with a rotated geotransform", {
+  ag100_skip_without_hdf5()
+  out <- withr::local_tempdir()
+  tif <- file.path(out, "ag100_v003_40_-105.tif")
+  fetch <- function() {
+    fetch_aster_ged(ag100_fetch_aoi(), out, src = dirname(ag100_fixture()), progress = FALSE)
+  }
+  fetch()
+  scratch <- withr::local_tempdir()
+  vrt <- file.path(scratch, "rotated.vrt")
+  sf::gdal_utils("translate", tif, vrt, options = c("-of", "VRT"))
+  xml <- readLines(vrt)
+  line <- grep("<GeoTransform>", xml)
+  gt <- as.numeric(strsplit(gsub(".*<GeoTransform>|</GeoTransform>.*", "", xml[line]), ",")[[1L]])
+  gt[c(3L, 5L)] <- 0.01
+  xml[line] <- paste0("  <GeoTransform>", paste(format(gt, digits = 17), collapse = ", "),
+                      "</GeoTransform>")
+  writeLines(xml, vrt)
+  rotated <- file.path(scratch, "rotated.tif")
+  sf::gdal_utils("translate", vrt, rotated)
+  expect_true(terra::is.rotated(suppressWarnings(terra::rast(rotated))))
+  file.copy(rotated, tif, overwrite = TRUE)
+
+  expect_message(fetched <- fetch(), "outdated grid, re-creating")
+  expect_identical(attr(fetched, "aster_ged_tiles")$status, "converted")
+  expect_false(terra::is.rotated(terra::rast(tif)))
+})
+
+test_that("AG100 matches padded filenames and reads two-dimensional geolocation", {
   ag100_skip_without_hdf5()
   out <- withr::local_tempdir()
   df <- fetch_aster_ged(ag100_fetch_aoi(-74.8, -74.2, 4.2, 4.8), out,
@@ -179,7 +278,8 @@ test_that("AG100 matches padded filenames and reads one-dimensional geolocation"
   index <- attr(df, "aster_ged_tiles")
   expect_identical(index$tile_id, "5.-75")
   expect_identical(index$status, "converted")
-  expect_equal(unname(as.vector(terra::ext(terra::rast(index$file)))), c(-75, -74, 4, 5))
+  expect_equal(unname(as.vector(terra::ext(terra::rast(index$file)))),
+               c(-75, -74, 4, 5) + c(-1, 1, -1, 1) / (2 * 19))
 })
 
 test_that("AG100 reports missing local sources in the index", {

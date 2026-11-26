@@ -109,6 +109,13 @@ earthdata_auth_check <- function(verbose = TRUE) {
 }
 
 #' @noRd
+.ag100_crosses_antimeridian <- function(polygon) {
+  bbox <- sf::st_bbox(polygon)
+  # Keep crossing rings contiguous during planar intersection.
+  isTRUE(bbox[["xmax"]] - bbox[["xmin"]] > 180)
+}
+
+#' @noRd
 .ag100_tiles_for_aoi <- function(aoi, id_col) {
   previous_s2 <- getOption("sf_use_s2")
   on.exit(options(sf_use_s2 = previous_s2), add = TRUE)
@@ -121,13 +128,9 @@ earthdata_auth_check <- function(verbose = TRUE) {
   map_rows <- vector("list", length(geometry))
   for (i in which(!sf::st_is_empty(geometry))) {
     polygon <- geometry[i]
+    crosses_dateline <- .ag100_crosses_antimeridian(polygon)
+    if (crosses_dateline) polygon <- sf::st_shift_longitude(polygon)
     bbox <- sf::st_bbox(polygon)
-    crosses_dateline <- bbox[["xmax"]] - bbox[["xmin"]] > 180
-    if (crosses_dateline) {
-      # Keep rings crossing the dateline contiguous during planar intersection.
-      polygon <- sf::st_shift_longitude(polygon)
-      bbox <- sf::st_bbox(polygon)
-    }
     lon_w <- seq.int(floor(bbox[["xmin"]]), ceiling(bbox[["xmax"]]) - 1L)
     lat_n <- seq.int(floor(bbox[["ymin"]]) + 1L, ceiling(bbox[["ymax"]]))
     grid <- expand.grid(lon_w = lon_w, lat_n = lat_n, KEEP.OUT.ATTRS = FALSE)

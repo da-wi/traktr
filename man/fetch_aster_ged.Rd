@@ -27,7 +27,8 @@ Created if needed.}
 \item{keep_h5}{Whether to retain downloaded HDF5 files in \code{out_dir},
 including when GeoTIFF conversion fails.}
 
-\item{overwrite}{Whether to replace existing GeoTIFFs.}
+\item{overwrite}{Whether to replace all existing GeoTIFFs. Files with an
+incompatible grid or band layout are recreated automatically.}
 
 \item{use_cmr}{Whether to look up remote tiles via NASA's Common Metadata
 Repository before falling back to constructed URLs.}

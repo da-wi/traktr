@@ -10,7 +10,8 @@
 #' @param src Optional directory searched recursively for local AG100 HDF5 files.
 #' @param keep_h5 Whether to retain downloaded HDF5 files in `out_dir`,
 #'   including when GeoTIFF conversion fails.
-#' @param overwrite Whether to replace existing GeoTIFFs.
+#' @param overwrite Whether to replace all existing GeoTIFFs. Files with an
+#'   incompatible grid or band layout are recreated automatically.
 #' @param use_cmr Whether to look up remote tiles via NASA's Common Metadata
 #'   Repository before falling back to constructed URLs.
 #' @param workers Maximum number of tiles to process in parallel, capped at four.
@@ -55,7 +56,19 @@ fetch_aster_ged <- function(df, out_dir, src = NULL, keep_h5 = FALSE, overwrite 
   dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
   tif <- file.path(out_dir, sprintf("ag100_v003_%d_%d.tif", tiles$lat_n, tiles$lon_w))
-  need <- which(isTRUE(overwrite) | !file.exists(tif) | dir.exists(tif))
+  available <- file.exists(tif) & !dir.exists(tif)
+  need <- which(isTRUE(overwrite) | !available)
+  if (!isTRUE(overwrite)) {
+    candidates <- which(available)
+    outdated <- candidates[!vapply(candidates, function(i) {
+      .ag100_tif_current(tif[i], tiles$lat_n[i], tiles$lon_w[i])
+    }, logical(1))]
+    if (length(outdated)) {
+      tile_ids <- tiles$tile_id[outdated]
+      cli::cli_inform("ASTER GED outdated grid, re-creating tile{?s} {.val {tile_ids}}.")
+      need <- sort(c(need, outdated))
+    }
+  }
   index <- tibble::tibble(
     tile_id = tiles$tile_id, lat_n = tiles$lat_n, lon_w = tiles$lon_w,
     file = tif, status = "exists", url_source = NA_character_,
@@ -268,10 +281,30 @@ fetch_aster_ged <- function(df, out_dir, src = NULL, keep_h5 = FALSE, overwrite 
   matrix(terra::values(r, mat = FALSE), size$nrow, size$ncol, byrow = TRUE)
 }
 
+.ag100_band_paths <- c(
+  elev = "ASTER GDEM/ASTGDEM", ndvi_mean = "NDVI/Mean", ndvi_sd = "NDVI/SDev",
+  temp_mean = "Temperature/Mean", temp_sd = "Temperature/SDev",
+  lwm = "Land Water Map/LWmap", nobs = "Observations/NumObs"
+)
+
+.ag100_tif_current <- function(tif, lat_n, lon_w) {
+  tryCatch({
+    r <- suppressWarnings(terra::rast(tif, guessCRS = FALSE))
+    nr <- nrow(r)
+    nc <- ncol(r)
+    if (min(nr, nc) < 2L || isTRUE(terra::is.rotated(r)) ||
+        !identical(names(r), names(.ag100_band_paths)) ||
+        !isTRUE(sf::st_crs(terra::crs(r)) == sf::st_crs(4326))) return(FALSE)
+
+    res <- 1 / c(nc - 1L, nr - 1L)
+    bounds <- .ag100_grid_bounds(lat_n, lon_w, res)
+    isTRUE(all(abs(terra::res(r) - res) <= 1e-9) &&
+             all(abs(as.vector(terra::ext(r)) - bounds) <= 1e-9))
+  }, error = function(e) FALSE)
+}
+
 .ag100_h5_to_tif <- function(h5, tif, lat_n, lon_w, tol = 1e-6) {
-  bands <- c(elev = "ASTER GDEM/ASTGDEM", ndvi_mean = "NDVI/Mean", ndvi_sd = "NDVI/SDev",
-             temp_mean = "Temperature/Mean", temp_sd = "Temperature/SDev",
-             lwm = "Land Water Map/LWmap", nobs = "Observations/NumObs")
+  bands <- .ag100_band_paths
   h5 <- normalizePath(h5, winslash = "/")
   subdatasets <- terra::describe(h5, sds = TRUE)
   read_dataset <- function(path, geolocation = FALSE) {
@@ -312,16 +345,7 @@ fetch_aster_ged <- function(df, out_dir, src = NULL, keep_h5 = FALSE, overwrite 
   output_dim <- if (transposed) c(nc, nr) else c(nr, nc)
   lat <- .ag100_coordinate(lat, output_dim, "Geolocation/Latitude", tol)
   lon <- .ag100_coordinate(lon, output_dim, "Geolocation/Longitude", tol)
-  if (vectors && nr == nc) {
-    lat_in_tile <- all(lat >= lat_n - 1 & lat <= lat_n)
-    lon_in_tile <- all(lon >= lon_w & lon <= lon_w + 1)
-    reversed <- nr > 1L && (all(diff(lat) > 0) || (lon_in_tile && all(diff(lon) < 0)))
-    if (!lat_in_tile || reversed) {
-      cli::cli_abort(paste("AG100 Geolocation/Latitude or Geolocation/Longitude has an",
-                           "unexpected extent or direction: lat/lon axes swapped?"))
-    }
-  }
-  bounds <- .ag100_extent(lat, lon, lat_n, lon_w)
+  bounds <- .ag100_extent(lat, lon, lat_n, lon_w, check_swap = vectors && nr == nc)
 
   raw <- matrix(NA_real_, nr * nc, length(bands))
   for (i in seq_along(bands)) {
@@ -353,15 +377,27 @@ fetch_aster_ged <- function(df, out_dir, src = NULL, keep_h5 = FALSE, overwrite 
   invisible(tif)
 }
 
-.ag100_extent <- function(lat, lon, lat_n, lon_w) {
+.ag100_extent <- function(lat, lon, lat_n, lon_w, check_swap = FALSE) {
+  endpoint_tol <- 1e-4
+  observed <- c(lat[1L], lat[length(lat)], lon[1L], lon[length(lon)])
+  expected <- c(lat_n, lat_n - 1, lon_w, lon_w + 1)
+  endpoints <- function(x) {
+    sprintf("Geolocation/Latitude %.9g to %.9g, Geolocation/Longitude %.9g to %.9g",
+            x[1L], x[2L], x[3L], x[4L])
+  }
   lat_step <- -diff(lat)
   lon_step <- diff(lon)
-  if (!length(lat_step) || !length(lon_step) || any(lat_step <= 0) || any(lon_step <= 0)) {
-    cli::cli_abort(paste("Invalid AG100 orientation: Geolocation/Latitude must be decreasing",
-                         "and Geolocation/Longitude increasing."))
+  valid_direction <- length(lat_step) && length(lon_step) &&
+    all(lat_step > 0) && all(lon_step > 0)
+  if (!valid_direction || any(abs(observed - expected) > endpoint_tol)) {
+    hint <- if (check_swap) " Check direction and extent: lat/lon axes swapped?" else ""
+    cli::cli_abort(paste0(
+      "Invalid AG100 extent or orientation. Observed endpoints: {endpoints(observed)}. ",
+      "Expected endpoints: {endpoints(expected)}.", hint
+    ))
   }
-  lat_res <- mean(lat_step)
-  lon_res <- mean(lon_step)
+  lat_res <- 1 / length(lat_step)
+  lon_res <- 1 / length(lon_step)
   # Float32 coordinates can round successive steps differently.
   if (any(abs(lat_step - lat_res) > lat_res / 100) ||
       any(abs(lon_step - lon_res) > lon_res / 100) ||
@@ -369,16 +405,13 @@ fetch_aster_ged <- function(df, out_dir, src = NULL, keep_h5 = FALSE, overwrite 
     cli::cli_abort("AG100 Geolocation/Latitude and Geolocation/Longitude must have a constant step on both axes.")
   }
 
-  west <- min(lon) - lon_res / 2
-  east <- max(lon) + lon_res / 2
-  north <- max(lat) + lat_res / 2
-  south <- min(lat) - lat_res / 2
-  if (abs(north - lat_n) > 1e-6 * length(lat) + 1e-9 || abs(west - lon_w) > lon_res / 10 ||
-      abs(east - west - 1) > lon_res / 10 || abs(north - south - 1) > lat_res / 10) {
-    cli::cli_abort(paste("AG100 extent from Geolocation/Latitude and Geolocation/Longitude",
-                         "does not match the expected one-degree tile at {lat_n}, {lon_w}."))
-  }
-  c(west, east, south, north)
+  .ag100_grid_bounds(lat_n, lon_w, c(lon_res, lat_res))
+}
+
+.ag100_grid_bounds <- function(lat_n, lon_w, res) {
+  half <- res / 2
+  c(lon_w - half[1L], lon_w + 1 + half[1L],
+    lat_n - 1 - half[2L], lat_n + half[2L])
 }
 
 .ag100_coordinate <- function(grid, dimensions, path, tol) {
