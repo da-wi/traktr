@@ -76,6 +76,14 @@ Land/water summaries report the percentage of valid area classified as
 water and, as \code{cin}, 100 minus the missing percentage before applying
 \code{ecolozip_na_quirk}.
 Existing columns with the selected statistic names are refreshed.
+
+In the 2022 county run, the elevation band was entirely missing in the
+converted AG100 v003 tiles for Hawaii, so elevation statistics could not be
+calculated for Hawaii counties. The cause has not been verified against the
+original HDF5 files.
+ASTER GDEM artefacts such as isolated pits near water bodies can distort
+elevation extrema (minima reached about −280 m in the 2022 county run),
+so prefer the mean or median.
 }
 \examples{
 \dontrun{

@@ -79,11 +79,12 @@ to kelvin.
 
 Each intersecting 100 m cell in the county contributes according to its area
 inside the polygon. Standard deviations use the area-weighted population formula.
-`missing_perc` is the percentage of tile-covered area without a valid value. It
-is zero when all covered values are valid and `NA` when there is no tile coverage.
+`missing_perc` is the percentage of mapped county area without a valid value,
+including area in tiles without an AG100 granule. It is 100 when all mapped area
+is missing and `NA` when no area was measured.
 
 - Elevation `cin` is the percentage of valid area at exactly zero metres.
-  Land/water `cin` is the percentage of tile-covered area with a valid value.
+  Land/water `cin` is the percentage of mapped county area with a valid value.
 - The observation flag `lt_4` indicates an area-weighted mean below four.
 - Elevation `sum` is `NA` in polygon mode.
 
@@ -92,6 +93,16 @@ cells across the whole polygon. As county area increases, elevation SD and the
 range from minimum to maximum tend to grow. Use `county_area_km2_geodesic` as a
 covariate. Set `naming = "ecolozip"` to use the column names expected by older
 scripts.
+
+### Known data gaps
+
+In the 2022 county run, the elevation band was entirely missing in the
+converted AG100 v003 tiles for Hawaii, so elevation statistics could not be
+calculated for Hawaii counties. The cause has not been verified against the
+original HDF5 files. ASTER GDEM artefacts such as isolated pits near water bodies can distort
+elevation extrema. Minima reached about −280 m in the 2022 county run, so prefer
+the mean or median. Some tiles in the Aleutians and on Bering Sea islands lack
+AG100 granules. The affected county area counts toward `missing_perc`.
 
 ### Parallel processing and resuming
 

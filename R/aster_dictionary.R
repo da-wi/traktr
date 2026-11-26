@@ -50,6 +50,12 @@
     description <- unname(descriptions[stat])
     if (band == "lwm") description[stat == "cin"] <- "Share of area with valid values (100 minus the missing percentage)."
     if (band == "elev") {
+      description <- paste(
+        description,
+        "In the 2022 county run, the elevation band was entirely missing in the converted",
+        "AG100 v003 tiles for Hawaii, so elevation statistics could not be calculated for",
+        "Hawaii counties. The cause has not been verified against the original HDF5 files."
+      )
       affected <- stat %in% c("min", "max", "sd")
       description[affected] <- paste(
         description[affected],
@@ -59,7 +65,9 @@
       extremes <- stat %in% c("min", "max")
       description[extremes] <- paste(
         description[extremes],
-        "Sensitive to ASTER GDEM artefacts (pits near water bodies); prefer mean/median."
+        "Sensitive to ASTER GDEM artefacts: isolated pits near water bodies can produce",
+        "strongly negative minima (down to about \u2212280 m in the 2022 county run).",
+        "Prefer the mean or median."
       )
     }
     row(band, stat, extra, county, ecolozip, traktr, unit, description)

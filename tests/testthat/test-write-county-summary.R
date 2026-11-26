@@ -62,7 +62,13 @@ test_that("the dictionary covers every column and follows naming and units", {
     expect_identical(dict$source[dict$name == "ALAND"], "US Census cartographic boundary 2020")
     expect_identical(dict$unit[dict$name == "ALAND"], "m\u00b2")
     expect_identical(dict$ecolozip_name[dict$name == "aster_elev_mean"], "ASTER_zip_elevation_mean")
-    expect_true(all(grepl("ASTER GDEM artefacts (pits near water bodies); prefer mean/median",
+    elev_names <- paste0("aster_elev_", c("mean", "min", "max", "sd", "cin", "sum",
+                                          "missing_perc", "median"))
+    elev_rows <- dict$description[match(elev_names, dict$name)]
+    expect_false(anyNA(elev_rows))
+    expect_true(all(grepl("elevation band was entirely missing in the converted",
+                          elev_rows, fixed = TRUE)))
+    expect_true(all(grepl("ASTER GDEM artefacts: isolated pits near water bodies",
                           dict$description[dict$name %in% c("aster_elev_min", "aster_elev_max")],
                           fixed = TRUE)))
     expect_true(all(grepl("includes county area in tiles without an AG100 granule",
