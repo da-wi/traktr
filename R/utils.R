@@ -558,7 +558,7 @@ summarize_exposure <- function(
     lat <- data$lat; lon <- data$lon
     
     # lead indices per subject
-    lead_idx <- ave(seq_along(sid), sid, FUN = function(ix) c(ix[-1], NA))
+    lead_idx <- stats::ave(seq_along(sid), sid, FUN = function(ix) c(ix[-1], NA))
     next_time <- ts[lead_idx]
     next_lat  <- lat[lead_idx]
     next_lon  <- lon[lead_idx]
@@ -673,7 +673,7 @@ summarize_exposure <- function(
   col_names <- c(group, setdiff(col_names, group))
   
   out <- do.call(rbind, lapply(out_rows, function(x) {
-    row <- setNames(vector("list", length(col_names)), col_names)
+    row <- stats::setNames(vector("list", length(col_names)), col_names)
     for (nm in names(x)) row[[nm]] <- x[[nm]]
     as.data.frame(row, stringsAsFactors = FALSE)
   }))

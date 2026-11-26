@@ -5,7 +5,7 @@ Authors@R: c(person("David","Willinger", email="david.willinger@kl.ac.at", role=
 Description: Build request tiles, fetch Sentinel-2 NDVI (CDSE), historic Landsat or MODIS NDVI (STAC), WorldCover land use and the annual Human Footprint index, and summarise per AOI in a tidy workflow.
 License: GPL-3
 Encoding: UTF-8
-URL: .
+URL: https://da-wi.github.io/traktr/, https://github.com/da-wi/traktr
 Roxygen: list(markdown = TRUE)
 Depends:
     R (>= 4.1.0)
@@ -13,18 +13,23 @@ Imports:
     CDSE,
     cli,
     curl,
-    exactextractr,    
+    exactextractr,
     h3jsr,
     ratelimitr,
     rlang,
     sf,
+    stats,
     terra,
-    tibble
+    tibble,
+    tools,
+    utils
 Suggests:
     cartographr,
     dplyr,
+    future.apply,
     ggplot2,
     jsonlite,
+    nanoparquet,
     purrr,
     rstac (>= 1.0.0),
     testthat (>= 3.0.0),

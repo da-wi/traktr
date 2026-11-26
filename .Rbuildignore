@@ -3,22 +3,19 @@
 ^pkgdown$
 ^.*\.Rproj$
 ^\.Rproj\.user$
-
-
 ^README\.Rmd$
 ^analysis\.R$
 ^output(/|$)
 ^rosm\.cache(/|$)
 ^tile_cache(/|$)
-
 ^\.Rhistory$
 ^\.RData$
-^.*~$        # editor backup files
-^.*\.orig$   # crude backup files
-
+^.*~$
+^.*\.orig$
 ^vignettes(/|$)
 ^vignettes/.*\.Rmd\.orig$
 ^vignettes/.*\.R$
-
-.github
-.data^showcase(/|$)
+^\.github(/|$)
+^\.data(/|$)
+^showcase(/|$)
+^docs\.new(/|$)
