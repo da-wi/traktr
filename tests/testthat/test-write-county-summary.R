@@ -68,6 +68,8 @@ test_that("the dictionary covers every column and follows naming and units", {
     expect_false(anyNA(elev_rows))
     expect_true(all(grepl("elevation band was entirely missing in the converted",
                           elev_rows, fixed = TRUE)))
+    expect_true(all(grepl("no ASTER elevation for any Hawaii ZIP code",
+                          elev_rows, fixed = TRUE)))
     expect_true(all(grepl("ASTER GDEM artefacts: isolated pits near water bodies",
                           dict$description[dict$name %in% c("aster_elev_min", "aster_elev_max")],
                           fixed = TRUE)))

@@ -46,8 +46,10 @@
 #'
 #' In the 2022 county run, the elevation band was entirely missing in the
 #' converted AG100 v003 tiles for Hawaii, so elevation statistics could not be
-#' calculated for Hawaii counties. The cause has not been verified against the
-#' original HDF5 files.
+#' calculated for Hawaii counties. The published ecolo-zip table (2021 retrieval)
+#' also has no ASTER elevation for any Hawaii ZIP code, which points to a gap in
+#' the source product. The cause has not been verified against the original HDF5
+#' files.
 #' ASTER GDEM artefacts such as isolated pits near water bodies can distort
 #' elevation extrema (minima reached about −280 m in the 2022 county run),
 #' so prefer the mean or median.
