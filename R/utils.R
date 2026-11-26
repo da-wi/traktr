@@ -165,10 +165,13 @@
 #' @rdname aoi-helpers
 #' @noRd
 .aoi_deduplicate <- function(aoi, id_col, deduplicate = TRUE) {
-  aoi <- sf::st_make_valid(aoi)
-  aoi4326 <- sf::st_transform(aoi, 4326)
+  by_h3 <- identical(id_col, "h3") && "h3" %in% names(aoi)
+  if ((deduplicate && !by_h3) || !isTRUE(all(sf::st_is_valid(aoi)))) {
+    aoi <- sf::st_make_valid(aoi)
+  }
+  aoi4326 <- if (isTRUE(sf::st_crs(aoi)$epsg == 4326L)) aoi else sf::st_transform(aoi, 4326)
   
-  if (identical(id_col, "h3") && "h3" %in% names(aoi4326)) {
+  if (by_h3) {
     # H3 cells are intrinsically unique by id
     aoi_unique <- aoi4326[!duplicated(aoi4326$h3), , drop = FALSE]
     aoi_unique$.aoi_row <- seq_len(nrow(aoi_unique))
@@ -178,7 +181,8 @@
   }
   
   if (deduplicate) {
-    aoi4326$.__wkb <- vapply(sf::st_as_binary(aoi4326$geometry), paste, "", collapse = "")
+    geometry <- aoi4326[[attr(aoi4326, "sf_column")]]
+    aoi4326$.__wkb <- vapply(sf::st_as_binary(geometry), paste, "", collapse = "")
     aoi_unique <- aoi4326[!duplicated(aoi4326$.__wkb), , drop = FALSE]
     aoi_unique$.aoi_row <- seq_len(nrow(aoi_unique))
     
