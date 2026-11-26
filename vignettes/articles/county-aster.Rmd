@@ -75,6 +75,16 @@ centikelvin. With `convert = TRUE`, NDVI is divided by 100 and mean temperatures
 are converted to degrees Celsius. Temperature standard deviations are converted
 to kelvin.
 
+### Temporal reference
+
+According to the AG100 v003 granule metadata, the per-pixel NDVI and temperature
+means and standard deviations use all ASTER observations from 2000–2010.
+These summaries cannot be used to compare years or assess change over time.
+For time-resolved NDVI, use `fetch_ndvi()` for Sentinel-2 (coverage starts in
+2015–2017) or `fetch_ndvi_stac()` for Landsat Collection 2 or MODIS MOD13Q1.
+ecolo-zip uses the same AG100 v003 product, so the validation applies to summaries
+derived from that product.
+
 ### What the statistics mean
 
 Each intersecting 100 m cell in the county contributes according to its area

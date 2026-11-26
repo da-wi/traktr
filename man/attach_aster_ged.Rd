@@ -66,6 +66,13 @@ Extraction and geodesic area use the AOI recorded by \code{\link[=fetch_aster_ge
 including any AOI override. Older fetch results use the original traktr AOI.
 Rows whose ID is absent from the AOI receive \code{NA} for all summary columns.
 
+\strong{Temporal reference.} According to the AG100 v003 granule metadata, the
+per-pixel NDVI and temperature means and standard deviations use all ASTER
+observations from 2000–2010. These summaries cannot be used to compare years
+or assess change over time. For time-resolved NDVI, use \code{\link{fetch_ndvi}()}
+for Sentinel-2 (coverage starts in 2015–2017) or \code{\link{fetch_ndvi_stac}()}
+for Landsat Collection 2 or MODIS MOD13Q1.
+
 Standard deviations use the area-weighted population formula. \code{missing_perc}
 includes county area in tiles without an AG100 granule and area in local
 tiles skipped with \code{allow_missing = TRUE}. It is 100 where all mapped area

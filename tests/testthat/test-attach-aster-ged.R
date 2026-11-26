@@ -119,6 +119,15 @@ test_that("the public fetch-to-attach workflow produces the exact column names",
   }
 })
 
+test_that("the ASTER dictionary records the NDVI and temperature reference period", {
+  dictionary <- .aster_ged_dictionary()
+  bands <- c("ndvi_mean", "ndvi_sd", "temp_mean", "temp_sd")
+  rows <- dictionary[dictionary$band %in% bands, ]
+
+  expect_setequal(rows$band, bands)
+  expect_true(all(grepl("2000\u20132010", rows$description, fixed = TRUE)))
+})
+
 test_that("band subsets use canonical order and cell counts use the first requested band", {
   x <- aster_summary_data(withr::local_tempdir())
   out <- attach_aster_ged(x, bands = c("lwm", "nobs"), naming = "traktr",

@@ -34,7 +34,7 @@
     sum = "Always NA in polygon mode because the point sum depends on the sample size.",
     missing_perc = "Share of area with missing values; includes county area in tiles without an AG100 granule.",
     lt_4 = "One if the area-weighted mean observation count is below four, zero otherwise.",
-    perc = "Water share of valid area.",
+    perc = "Water share of valid area classified using ASTER visible bands.",
     median = "Area-weighted median of valid cells."
   )
 
@@ -48,10 +48,24 @@
     if (isTRUE(convert) && band == "temp_mean") unit[stat == "sd"] <- "K"
 
     description <- unname(descriptions[stat])
+    if (band %in% c("ndvi_mean", "ndvi_sd", "temp_mean", "temp_sd")) {
+      description <- paste(
+        description,
+        "According to the granule metadata, AG100 v003 calculates per-pixel means",
+        "and standard deviations from all ASTER observations from 2000\u20132010.",
+        "The values describe the full period and cannot be used for single-year estimates."
+      )
+    }
+    if (band == "nobs") {
+      description <- paste(
+        description, "Number of ASTER observations (2000\u20132010) behind the per-pixel mean."
+      )
+    }
     if (band == "lwm") description[stat == "cin"] <- "Share of area with valid values (100 minus the missing percentage)."
     if (band == "elev") {
       description <- paste(
         description,
+        "ASTER GDEM elevation (static).",
         "In the 2022 county run, the elevation band was entirely missing in the converted",
         "AG100 v003 tiles for Hawaii, so elevation statistics could not be calculated for",
         "Hawaii counties. The published ecolo-zip table (2021 retrieval) also has no",
